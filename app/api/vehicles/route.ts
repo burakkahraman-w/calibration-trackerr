@@ -4,12 +4,15 @@ import {
   isMemoryBackend,
   listCalibrationVehicles,
 } from "@/lib/calibration-db";
+import { listWorkflowSteps } from "@/lib/workflow-steps-db";
 
 export async function GET() {
   try {
     const vehicles = await listCalibrationVehicles();
+    const steps = await listWorkflowSteps();
     return NextResponse.json({
       vehicles,
+      steps,
       storageBackend: isMemoryBackend() ? "memory" : "postgres",
     });
   } catch (e) {

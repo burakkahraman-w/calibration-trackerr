@@ -43,9 +43,25 @@ export function workflowStepsTableMissingMessage(): string {
   return "Run db/migrations/004_calibration_workflow_steps.sql on your database to edit steps.";
 }
 
-export async function listWorkflowSteps(): Promise<WorkflowStepRow[]> {
+/** Short TTL so many concurrent lambdas share fewer identical reads (session pooler is tight on Vercel). */
+const STEPS_CACHE_TTL_MS = 45_000;
+
+type StepsCacheEntry = { at: number; steps: WorkflowStepRow[]; persisted: boolean };
+
+let stepsCache: StepsCacheEntry | null = null;
+
+export function invalidateWorkflowStepsCache(): void {
+  stepsCache = null;
+}
+
+async function loadStepsAndPersisted(): Promise<{ steps: WorkflowStepRow[]; persisted: boolean }> {
   if (isMemoryBackend()) {
-    return memorySortCopy();
+    return { steps: memorySortCopy(), persisted: true };
+  }
+
+  const now = Date.now();
+  if (stepsCache && now - stepsCache.at < STEPS_CACHE_TTL_MS) {
+    return { steps: stepsCache.steps, persisted: stepsCache.persisted };
   }
 
   const pool = getPool();
@@ -55,29 +71,30 @@ export async function listWorkflowSteps(): Promise<WorkflowStepRow[]> {
        from public.calibration_workflow_steps
        order by position asc`,
     );
-    return res.rows.map((r) => ({
+    const steps = res.rows.map((r) => ({
       id: String(r.id),
       title: String(r.title),
       position: Number(r.position),
     }));
+    const out = { steps, persisted: true };
+    stepsCache = { at: now, ...out };
+    return out;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (!/calibration_workflow_steps|does not exist|undefined_table/i.test(msg)) throw e;
-    return defaultRows();
+    const steps = defaultRows();
+    const out = { steps, persisted: false };
+    stepsCache = { at: now, ...out };
+    return out;
   }
 }
 
+export async function listWorkflowSteps(): Promise<WorkflowStepRow[]> {
+  return (await loadStepsAndPersisted()).steps;
+}
+
 export async function workflowStepsArePersisted(): Promise<boolean> {
-  if (isMemoryBackend()) return true;
-  const pool = getPool();
-  try {
-    await pool.query(`select 1 from public.calibration_workflow_steps limit 1`);
-    return true;
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (!/calibration_workflow_steps|does not exist|undefined_table/i.test(msg)) throw e;
-    return false;
-  }
+  return (await loadStepsAndPersisted()).persisted;
 }
 
 export async function insertWorkflowStep(title: string): Promise<WorkflowStepRow> {
@@ -101,6 +118,7 @@ export async function insertWorkflowStep(title: string): Promise<WorkflowStepRow
   );
   const r = res.rows[0];
   if (!r) throw new Error("Insert returned no row");
+  invalidateWorkflowStepsCache();
   return { id: String(r.id), title: String(r.title), position: Number(r.position) };
 }
 
@@ -126,6 +144,7 @@ export async function updateWorkflowStepTitle(id: string, title: string): Promis
     [id, trimmed],
   );
   const r = res.rows[0];
+  if (r) invalidateWorkflowStepsCache();
   return r ? { id: String(r.id), title: String(r.title), position: Number(r.position) } : null;
 }
 
@@ -184,6 +203,7 @@ export async function deleteWorkflowStep(id: string): Promise<boolean> {
        where is_completed = false`,
     );
     await client.query("commit");
+    invalidateWorkflowStepsCache();
     return true;
   } catch (e) {
     await client.query("rollback");
@@ -239,6 +259,7 @@ export async function moveWorkflowStep(id: string, direction: "up" | "down"): Pr
       [id, neighborPos, nid, p],
     );
     await client.query("commit");
+    invalidateWorkflowStepsCache();
     return listWorkflowSteps();
   } catch (e) {
     await client.query("rollback");

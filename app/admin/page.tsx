@@ -47,31 +47,17 @@ export default function AdminPage() {
 
   const loadAdminData = useCallback(async () => {
     setLoadError(null);
-    const [vRes, oRes, wRes] = await Promise.all([
-      fetch("/api/vehicles"),
-      fetch("/api/admin/owners"),
-      fetch("/api/admin/workflow-steps"),
-    ]);
-    const vJson = await vRes.json().catch(() => ({}));
-    const oJson = await oRes.json().catch(() => ({}));
-    const wJson = await wRes.json().catch(() => ({}));
-    if (!vRes.ok) {
-      setLoadError(typeof vJson.error === "string" ? vJson.error : "Failed to load vehicles");
+    const res = await fetch("/api/admin/bootstrap");
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setLoadError(typeof j.error === "string" ? j.error : "Failed to load admin data");
       return;
     }
-    if (!oRes.ok) {
-      setLoadError(typeof oJson.error === "string" ? oJson.error : "Failed to load owners");
-      return;
-    }
-    if (!wRes.ok) {
-      setLoadError(typeof wJson.error === "string" ? wJson.error : "Failed to load workflow steps");
-      return;
-    }
-    setVehicles((vJson.vehicles as CalibrationVehicleRow[]) ?? []);
-    setOwners((oJson.owners as OwnerOptionRow[]) ?? []);
-    const steps = (wJson.steps as WorkflowStepRow[]) ?? [];
+    setVehicles((j.vehicles as CalibrationVehicleRow[]) ?? []);
+    setOwners((j.owners as OwnerOptionRow[]) ?? []);
+    const steps = (j.steps as WorkflowStepRow[]) ?? [];
     setWorkflowSteps([...steps].sort((a, b) => a.position - b.position));
-    setWorkflowPersisted(Boolean(wJson.persisted));
+    setWorkflowPersisted(Boolean(j.persisted));
   }, []);
 
   useEffect(() => {

@@ -72,22 +72,7 @@ export function CalibrationTracker() {
   }, []);
 
   const fetchVehicles = useCallback(async () => {
-    const [wRes, vRes] = await Promise.all([
-      fetch("/api/workflow-steps"),
-      fetch("/api/vehicles"),
-    ]);
-    const wJson = await wRes.json().catch(() => ({}));
-    if (wRes.ok && Array.isArray(wJson.steps)) {
-      const rows = wJson.steps as { title?: unknown; position?: unknown }[];
-      const titles = [...rows]
-        .sort((a, b) => Number(a.position) - Number(b.position))
-        .map((r) => String(r.title ?? ""))
-        .filter((t) => t.length > 0);
-      if (titles.length > 0) {
-        setStepTitles(titles);
-      }
-    }
-
+    const vRes = await fetch("/api/vehicles");
     const json = await vRes.json().catch(() => ({}));
     if (!vRes.ok) {
       const msg =
@@ -103,6 +88,16 @@ export function CalibrationTracker() {
       setStorageBackend(json.storageBackend);
     }
     setVehicles((json.vehicles as CalibrationVehicleRow[]) ?? []);
+    if (Array.isArray(json.steps)) {
+      const rows = json.steps as { title?: unknown; position?: unknown }[];
+      const titles = [...rows]
+        .sort((a, b) => Number(a.position) - Number(b.position))
+        .map((r) => String(r.title ?? ""))
+        .filter((t) => t.length > 0);
+      if (titles.length > 0) {
+        setStepTitles(titles);
+      }
+    }
   }, []);
 
   useEffect(() => {

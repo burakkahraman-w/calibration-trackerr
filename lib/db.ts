@@ -2,6 +2,20 @@ import { Pool } from "pg";
 
 let pool: Pool | null = null;
 
+/**
+ * Supabase *session* pooler caps total connections (often ~15 per user). Each Vercel serverless
+ * instance must use a small `max` so concurrent lambdas do not exhaust the pool (EMAXCONNSESSION).
+ * Override with DATABASE_POOL_MAX (keep ≤ ~10 for session mode unless Supabase raised your cap).
+ */
+function poolMax(): number {
+  const raw = process.env.DATABASE_POOL_MAX;
+  if (raw != null && String(raw).trim() !== "") {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n >= 1) return Math.min(15, Math.floor(n));
+  }
+  return process.env.VERCEL ? 2 : 10;
+}
+
 /** Supabase "Direct" host is often IPv6-only; many networks/DNS setups get getaddrinfo ENOTFOUND. */
 function assertNotSupabaseDirectHost(connectionString: string): void {
   if (process.env.SUPABASE_ALLOW_DIRECT_DB_HOST === "true") {
@@ -106,7 +120,10 @@ export function getPool(): Pool {
     const connectionString = connectionStringWithTlsRelaxed(logicalUrl);
     pool = new Pool({
       connectionString,
-      max: Number(process.env.DATABASE_POOL_MAX ?? 10),
+      max: poolMax(),
+      min: 0,
+      idleTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 12_000,
       ssl: sslOptionForUrl(logicalUrl),
     });
   }
