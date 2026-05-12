@@ -27,6 +27,9 @@ export default function AdminPage() {
   const [addOtherVehicle, setAddOtherVehicle] = useState("");
   const [addVehicleOwner, setAddVehicleOwner] = useState("");
   const [addPerformedAt, setAddPerformedAt] = useState("");
+  /** Pre-selected owner on the public tracker (admin-controlled). */
+  const [defaultTrackerOwner, setDefaultTrackerOwner] = useState("");
+  const [savingDefaultOwner, setSavingDefaultOwner] = useState(false);
 
   const refreshMe = useCallback(async () => {
     setLoginError(null);
@@ -55,6 +58,9 @@ export default function AdminPage() {
     }
     setVehicles((j.vehicles as CalibrationVehicleRow[]) ?? []);
     setOwners((j.owners as OwnerOptionRow[]) ?? []);
+    setDefaultTrackerOwner(
+      typeof j.activeCalibrationOwner === "string" ? j.activeCalibrationOwner : "",
+    );
     const steps = (j.steps as WorkflowStepRow[]) ?? [];
     setWorkflowSteps([...steps].sort((a, b) => a.position - b.position));
     setWorkflowPersisted(Boolean(j.persisted));
@@ -107,6 +113,7 @@ export default function AdminPage() {
     await fetch("/api/admin/logout", { method: "POST" });
     setVehicles([]);
     setOwners([]);
+    setDefaultTrackerOwner("");
     setWorkflowSteps([]);
     setWorkflowPersisted(true);
     setStepEditDraft({});
@@ -163,6 +170,25 @@ export default function AdminPage() {
       return;
     }
     await loadAdminData();
+  };
+
+  const saveDefaultTrackerOwner = async () => {
+    setSavingDefaultOwner(true);
+    try {
+      const res = await fetch("/api/admin/active-calibration-owner", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ owner: defaultTrackerOwner }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(typeof j.error === "string" ? j.error : "Could not save default owner");
+        return;
+      }
+      await loadAdminData();
+    } finally {
+      setSavingDefaultOwner(false);
+    }
   };
 
   const addVehicleAdmin = async (e: React.FormEvent) => {
@@ -381,7 +407,7 @@ export default function AdminPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Admin</h1>
-          <p className="mt-1 text-sm text-slate-600">Vehicles, owners, clear completed.</p>
+          <p className="mt-1 text-sm text-slate-600">Vehicles, owners, default tracker owner, clear completed.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -544,6 +570,45 @@ export default function AdminPage() {
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
+        <h2 className="text-lg font-semibold text-slate-900">Active calibration owner</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Pre-selects this person in the owner dropdown on the public tracker (they can still change
+          it before starting). Apply{" "}
+          <code className="rounded bg-slate-100 px-1">005_calibration_app_settings.sql</code> on
+          Postgres first; until then the value cannot be saved for production DB.
+        </p>
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <label className="flex min-w-[220px] flex-1 flex-col text-xs font-medium text-slate-600">
+            Default owner on tracker
+            <select
+              value={defaultTrackerOwner}
+              onChange={(e) => setDefaultTrackerOwner(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900"
+            >
+              <option value="">None — user chooses each time</option>
+              {owners.map((o) => (
+                <option key={o.id} value={o.name}>
+                  {o.name}
+                </option>
+              ))}
+              {defaultTrackerOwner &&
+                !owners.some((o) => o.name === defaultTrackerOwner) && (
+                  <option value={defaultTrackerOwner}>{defaultTrackerOwner} (stored)</option>
+                )}
+            </select>
+          </label>
+          <button
+            type="button"
+            disabled={savingDefaultOwner}
+            onClick={() => void saveDefaultTrackerOwner()}
+            className="rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm disabled:opacity-40"
+          >
+            {savingDefaultOwner ? "Saving…" : "Save"}
+          </button>
+        </div>
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">

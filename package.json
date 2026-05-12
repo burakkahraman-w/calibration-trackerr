@@ -7,6 +7,7 @@
     "dev:clean": "rm -rf .next && env -u NODE_OPTIONS next dev",
     "supabase:print-db-url": "node scripts/print-supabase-database-url.mjs",
     "db:apply-004": "node scripts/apply-migration-004.mjs",
+    "db:apply-005": "node scripts/apply-migration-005.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

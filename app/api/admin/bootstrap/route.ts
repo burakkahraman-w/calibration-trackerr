@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdminResponse } from "@/lib/admin-route";
+import { getActiveCalibrationOwner } from "@/lib/calibration-settings-db";
 import { isMemoryBackend, listCalibrationVehicles } from "@/lib/calibration-db";
 import { listOwnerRows } from "@/lib/owner-options-db";
 import { listWorkflowSteps, workflowStepsArePersisted } from "@/lib/workflow-steps-db";
@@ -12,11 +13,13 @@ export async function GET() {
   try {
     const vehicles = await listCalibrationVehicles();
     const owners = await listOwnerRows();
+    const activeCalibrationOwner = await getActiveCalibrationOwner();
     const steps = await listWorkflowSteps();
     const persisted = await workflowStepsArePersisted();
     return NextResponse.json({
       vehicles,
       owners,
+      activeCalibrationOwner,
       steps,
       persisted,
       storageBackend: isMemoryBackend() ? "memory" : "postgres",

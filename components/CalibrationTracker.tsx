@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CalibrationVehicleRow } from "@/lib/types";
 import {
   OWNER_DROPDOWN_OPTIONS,
@@ -49,14 +49,24 @@ export function CalibrationTracker() {
   const [formError, setFormError] = useState<string | null>(null);
   const [ownerNames, setOwnerNames] = useState<string[]>(() => [...OWNER_DROPDOWN_OPTIONS]);
   const [stepTitles, setStepTitles] = useState<string[]>(() => [...DEFAULT_CALIBRATION_STEPS]);
+  /** Admin-configured default owner; reapplied after starting a calibration when set. */
+  const activeDefaultOwnerRef = useRef<string>("");
 
   const fetchOwnerNames = useCallback(async () => {
     const res = await fetch("/api/owner-options");
     const json = await res.json().catch(() => ({}));
     if (!res.ok) return;
     const names = json.owners;
+    const activeRaw =
+      typeof json.activeCalibrationOwner === "string"
+        ? String(json.activeCalibrationOwner).trim()
+        : "";
     if (Array.isArray(names) && names.every((x: unknown) => typeof x === "string")) {
-      setOwnerNames(names as string[]);
+      const list = names as string[];
+      setOwnerNames(list);
+      const preset = activeRaw && list.includes(activeRaw) ? activeRaw : "";
+      activeDefaultOwnerRef.current = preset;
+      setOwnerSelect((cur) => (cur === "" ? preset : cur));
     }
   }, []);
 
@@ -165,7 +175,7 @@ export function CalibrationTracker() {
     }
     setVehicleSelect("");
     setOtherVehicleName("");
-    setOwnerSelect("");
+    setOwnerSelect(activeDefaultOwnerRef.current);
     const created = json.vehicle as CalibrationVehicleRow | undefined;
     if (created) {
       setVehicles((prev) => {
