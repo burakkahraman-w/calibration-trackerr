@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { CalibrationVehicleRow } from "@/lib/types";
 import type { OwnerOptionRow } from "@/lib/owner-options-db";
+import type { WorkflowStepRow } from "@/lib/workflow-steps-db";
 import { OTHERS_VEHICLE_VALUE, VEHICLE_DROPDOWN_OPTIONS } from "@/lib/fleet-options";
 
 export default function AdminPage() {
@@ -14,6 +15,10 @@ export default function AdminPage() {
 
   const [vehicles, setVehicles] = useState<CalibrationVehicleRow[]>([]);
   const [owners, setOwners] = useState<OwnerOptionRow[]>([]);
+  const [workflowSteps, setWorkflowSteps] = useState<WorkflowStepRow[]>([]);
+  const [workflowPersisted, setWorkflowPersisted] = useState(true);
+  const [newStepTitle, setNewStepTitle] = useState("");
+  const [stepEditDraft, setStepEditDraft] = useState<Record<string, string>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [newOwnerName, setNewOwnerName] = useState("");
@@ -42,12 +47,14 @@ export default function AdminPage() {
 
   const loadAdminData = useCallback(async () => {
     setLoadError(null);
-    const [vRes, oRes] = await Promise.all([
+    const [vRes, oRes, wRes] = await Promise.all([
       fetch("/api/vehicles"),
       fetch("/api/admin/owners"),
+      fetch("/api/admin/workflow-steps"),
     ]);
     const vJson = await vRes.json().catch(() => ({}));
     const oJson = await oRes.json().catch(() => ({}));
+    const wJson = await wRes.json().catch(() => ({}));
     if (!vRes.ok) {
       setLoadError(typeof vJson.error === "string" ? vJson.error : "Failed to load vehicles");
       return;
@@ -56,8 +63,15 @@ export default function AdminPage() {
       setLoadError(typeof oJson.error === "string" ? oJson.error : "Failed to load owners");
       return;
     }
+    if (!wRes.ok) {
+      setLoadError(typeof wJson.error === "string" ? wJson.error : "Failed to load workflow steps");
+      return;
+    }
     setVehicles((vJson.vehicles as CalibrationVehicleRow[]) ?? []);
     setOwners((oJson.owners as OwnerOptionRow[]) ?? []);
+    const steps = (wJson.steps as WorkflowStepRow[]) ?? [];
+    setWorkflowSteps([...steps].sort((a, b) => a.position - b.position));
+    setWorkflowPersisted(Boolean(wJson.persisted));
   }, []);
 
   useEffect(() => {
@@ -67,6 +81,14 @@ export default function AdminPage() {
   useEffect(() => {
     if (me?.authenticated) void loadAdminData();
   }, [me?.authenticated, loadAdminData]);
+
+  useEffect(() => {
+    const m: Record<string, string> = {};
+    for (const s of workflowSteps) {
+      m[s.id] = s.title;
+    }
+    setStepEditDraft(m);
+  }, [workflowSteps]);
 
   useEffect(() => {
     const now = new Date();
@@ -99,6 +121,9 @@ export default function AdminPage() {
     await fetch("/api/admin/logout", { method: "POST" });
     setVehicles([]);
     setOwners([]);
+    setWorkflowSteps([]);
+    setWorkflowPersisted(true);
+    setStepEditDraft({});
     await refreshMe();
   };
 
@@ -209,6 +234,91 @@ export default function AdminPage() {
     await loadAdminData();
   };
 
+  const addWorkflowStep = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = newStepTitle.trim();
+    if (!title) return;
+    const res = await fetch("/api/admin/workflow-steps", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(typeof j.error === "string" ? j.error : "Could not add step");
+      return;
+    }
+    setNewStepTitle("");
+    if (Array.isArray(j.steps)) {
+      setWorkflowSteps([...(j.steps as WorkflowStepRow[])].sort((a, b) => a.position - b.position));
+    } else {
+      await loadAdminData();
+    }
+  };
+
+  const saveWorkflowStepTitle = async (id: string, fallbackTitle: string) => {
+    const raw = stepEditDraft[id];
+    const title = (raw ?? fallbackTitle).trim();
+    if (!title) {
+      setStepEditDraft((d) => ({ ...d, [id]: fallbackTitle }));
+      return;
+    }
+    if (title === fallbackTitle) return;
+    const res = await fetch(`/api/admin/workflow-steps/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(typeof j.error === "string" ? j.error : "Update failed");
+      return;
+    }
+    if (Array.isArray(j.steps)) {
+      setWorkflowSteps([...(j.steps as WorkflowStepRow[])].sort((a, b) => a.position - b.position));
+    } else {
+      await loadAdminData();
+    }
+  };
+
+  const moveWorkflowStepRow = async (id: string, move: "up" | "down") => {
+    const res = await fetch(`/api/admin/workflow-steps/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ move }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(typeof j.error === "string" ? j.error : "Reorder failed");
+      return;
+    }
+    if (Array.isArray(j.steps)) {
+      setWorkflowSteps([...(j.steps as WorkflowStepRow[])].sort((a, b) => a.position - b.position));
+    } else {
+      await loadAdminData();
+    }
+  };
+
+  const deleteWorkflowStepRow = async (id: string) => {
+    if (!confirm("Delete this step? Active vehicles on this index will shift to the next label.")) return;
+    const res = await fetch(`/api/admin/workflow-steps/${id}`, { method: "DELETE" });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(typeof j.error === "string" ? j.error : "Delete failed");
+      return;
+    }
+    if (Array.isArray(j.steps)) {
+      setWorkflowSteps([...(j.steps as WorkflowStepRow[])].sort((a, b) => a.position - b.position));
+    } else {
+      await loadAdminData();
+    }
+  };
+
+  const stepLabelForVehicle = (stepIndex: number) => {
+    const ordered = [...workflowSteps].sort((a, b) => a.position - b.position);
+    return ordered[stepIndex]?.title ?? `Step ${stepIndex}`;
+  };
+
   if (!me) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
@@ -316,6 +426,97 @@ export default function AdminPage() {
           {loadError}
         </div>
       )}
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
+        <h2 className="text-lg font-semibold text-slate-900">Calibration steps</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Order matches the tracker (&quot;Next&quot; / &quot;Finish&quot;). Run{" "}
+          <code className="rounded bg-slate-100 px-1">004_calibration_workflow_steps.sql</code> on
+          Postgres to enable editing (until then, defaults are read-only).
+        </p>
+        {!workflowPersisted && (
+          <p className="mt-2 text-xs font-medium text-amber-800">
+            Workflow table not found — showing built-in defaults. Apply the migration to customize steps.
+          </p>
+        )}
+        <form onSubmit={addWorkflowStep} className="mt-4 flex flex-wrap gap-2">
+          <input
+            value={newStepTitle}
+            onChange={(e) => setNewStepTitle(e.target.value)}
+            placeholder="New step title"
+            disabled={!workflowPersisted}
+            className="min-w-[200px] flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100 disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={!workflowPersisted || !newStepTitle.trim()}
+            className="rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm disabled:opacity-40"
+          >
+            Add step
+          </button>
+        </form>
+        <ul className="mt-4 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/50">
+          {workflowSteps.length === 0 && (
+            <li className="px-4 py-6 text-center text-sm text-slate-500">No steps.</li>
+          )}
+          {[...workflowSteps]
+            .sort((a, b) => a.position - b.position)
+            .map((s, idx, arr) => (
+              <li
+                key={s.id}
+                className="flex flex-col gap-2 px-4 py-3 text-sm text-slate-800 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between"
+              >
+                <div className="flex min-w-0 flex-1 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
+                  <span className="shrink-0 text-xs font-semibold text-slate-500">#{idx + 1}</span>
+                  <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                    <input
+                      value={stepEditDraft[s.id] ?? s.title}
+                      onChange={(e) =>
+                        setStepEditDraft((d) => ({ ...d, [s.id]: e.target.value }))
+                      }
+                      disabled={!workflowPersisted}
+                      className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      disabled={!workflowPersisted}
+                      onClick={() => void saveWorkflowStepTitle(s.id, s.title)}
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    disabled={!workflowPersisted || idx === 0}
+                    onClick={() => void moveWorkflowStepRow(s.id, "up")}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+                  >
+                    Up
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!workflowPersisted || idx >= arr.length - 1}
+                    onClick={() => void moveWorkflowStepRow(s.id, "down")}
+                    className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-40"
+                  >
+                    Down
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!workflowPersisted || arr.length <= 1}
+                    onClick={() => void deleteWorkflowStepRow(s.id)}
+                    className="rounded-lg border border-red-200 bg-red-50 px-2 py-1 text-xs font-semibold text-red-800 hover:bg-red-100 disabled:opacity-40"
+                  >
+                    Remove
+                  </button>
+                </div>
+              </li>
+            ))}
+        </ul>
+      </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
         <h2 className="text-lg font-semibold text-slate-900">Owners (dropdown)</h2>
@@ -493,7 +694,9 @@ export default function AdminPage() {
                       )}
                     </select>
                   </td>
-                  <td className="px-3 py-2 text-slate-600">{v.is_completed ? "—" : v.step_index}</td>
+                  <td className="px-3 py-2 text-slate-600">
+                    {v.is_completed ? "—" : stepLabelForVehicle(v.step_index)}
+                  </td>
                   <td className="px-3 py-2 text-right">
                     <button
                       type="button"

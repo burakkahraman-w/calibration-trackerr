@@ -3,13 +3,10 @@ import {
   getCalibrationVehicleById,
   updateCalibrationVehicleStep,
 } from "@/lib/calibration-db";
-import { CALIBRATION_STEPS, type StepIndex } from "@/lib/workflow";
+import { isValidStepIndex } from "@/lib/workflow";
+import { listWorkflowSteps } from "@/lib/workflow-steps-db";
 
 type Params = { params: Promise<{ id: string }> };
-
-function isStepIndex(n: number): n is StepIndex {
-  return Number.isInteger(n) && n >= 0 && n < CALIBRATION_STEPS.length;
-}
 
 export async function PATCH(request: Request, context: Params) {
   const { id } = await context.params;
@@ -34,6 +31,12 @@ export async function PATCH(request: Request, context: Params) {
   }
 
   try {
+    const steps = await listWorkflowSteps();
+    const n = steps.length;
+    if (n === 0) {
+      return NextResponse.json({ error: "No calibration steps configured" }, { status: 500 });
+    }
+
     const row = await getCalibrationVehicleById(id);
 
     if (!row) {
@@ -45,7 +48,7 @@ export async function PATCH(request: Request, context: Params) {
     }
 
     let step = row.step_index as number;
-    if (!isStepIndex(step)) {
+    if (!isValidStepIndex(n, step)) {
       return NextResponse.json({ error: "Invalid stored step" }, { status: 500 });
     }
 
@@ -58,7 +61,7 @@ export async function PATCH(request: Request, context: Params) {
       return NextResponse.json({ vehicle: updated });
     }
 
-    if (step >= CALIBRATION_STEPS.length - 1) {
+    if (step >= n - 1) {
       const updated = await updateCalibrationVehicleStep(id, {
         is_completed: true,
         completed_at: new Date(),

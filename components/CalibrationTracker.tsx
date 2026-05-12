@@ -8,11 +8,10 @@ import {
   VEHICLE_DROPDOWN_OPTIONS,
 } from "@/lib/fleet-options";
 import {
-  CALIBRATION_STEPS,
-  STEP_COLORS,
+  DEFAULT_CALIBRATION_STEPS,
   nextStepLabel,
   prevStepLabel,
-  type StepIndex,
+  stepColorsAt,
 } from "@/lib/workflow";
 
 function formatPerformed(iso: string) {
@@ -28,10 +27,6 @@ function formatCompleted(iso: string) {
   const date = new Intl.DateTimeFormat(undefined, { dateStyle: "short" }).format(d);
   const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(d);
   return { date, time };
-}
-
-function isStepIndex(n: number): n is StepIndex {
-  return Number.isInteger(n) && n >= 0 && n < CALIBRATION_STEPS.length;
 }
 
 /** Supabase / Postgres blocks new connections after repeated bad logins; slow polling avoids extending it. */
@@ -53,6 +48,7 @@ export function CalibrationTracker() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [ownerNames, setOwnerNames] = useState<string[]>(() => [...OWNER_DROPDOWN_OPTIONS]);
+  const [stepTitles, setStepTitles] = useState<string[]>(() => [...DEFAULT_CALIBRATION_STEPS]);
 
   const fetchOwnerNames = useCallback(async () => {
     const res = await fetch("/api/owner-options");
@@ -76,9 +72,24 @@ export function CalibrationTracker() {
   }, []);
 
   const fetchVehicles = useCallback(async () => {
-    const res = await fetch("/api/vehicles");
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
+    const [wRes, vRes] = await Promise.all([
+      fetch("/api/workflow-steps"),
+      fetch("/api/vehicles"),
+    ]);
+    const wJson = await wRes.json().catch(() => ({}));
+    if (wRes.ok && Array.isArray(wJson.steps)) {
+      const rows = wJson.steps as { title?: unknown; position?: unknown }[];
+      const titles = [...rows]
+        .sort((a, b) => Number(a.position) - Number(b.position))
+        .map((r) => String(r.title ?? ""))
+        .filter((t) => t.length > 0);
+      if (titles.length > 0) {
+        setStepTitles(titles);
+      }
+    }
+
+    const json = await vRes.json().catch(() => ({}));
+    if (!vRes.ok) {
       const msg =
         typeof json.error === "string" ? json.error : "Failed to load vehicles";
       setStorageBackend(null);
@@ -315,7 +326,9 @@ export function CalibrationTracker() {
         <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
           <h2 className="text-lg font-semibold text-slate-900">Active calibrations</h2>
           <p className="text-xs text-slate-500 sm:text-sm">
-            First step: Target Based Data Collection.
+            {stepTitles.length > 0
+              ? `First step: ${stepTitles[0]}.`
+              : "Configure workflow steps in Admin."}
           </p>
         </div>
         <div className="overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 shadow-lg shadow-slate-200/40 backdrop-blur-sm">
@@ -339,11 +352,15 @@ export function CalibrationTracker() {
               )}
               {active.map((v) => {
                 const step = v.step_index;
-                const safeStep = isStepIndex(step) ? step : 0;
-                const colors = STEP_COLORS[safeStep];
-                const nextLabel = nextStepLabel(safeStep);
-                const prev = prevStepLabel(safeStep);
+                const n = stepTitles.length;
+                const safeStep =
+                  n > 0 && Number.isInteger(step) ? Math.max(0, Math.min(n - 1, step)) : 0;
+                const colors = stepColorsAt(safeStep);
+                const nextLabel = n > 0 ? nextStepLabel(stepTitles, safeStep) : null;
+                const prev = n > 0 ? prevStepLabel(stepTitles, safeStep) : null;
                 const nextDisabled = busyId === v.id;
+                const atLast = n > 0 && safeStep >= n - 1;
+                const label = n > 0 ? stepTitles[safeStep] : "—";
                 return (
                   <tr key={v.id} className={`border-b border-slate-100 ${colors.row}`}>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-700">
@@ -361,7 +378,7 @@ export function CalibrationTracker() {
                         <span
                           className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${colors.badge}`}
                         >
-                          {CALIBRATION_STEPS[safeStep]}
+                          {label}
                         </span>
                       </span>
                     </td>
@@ -383,19 +400,19 @@ export function CalibrationTracker() {
                         )}
                         <button
                           type="button"
-                          disabled={nextDisabled}
+                          disabled={nextDisabled || n === 0}
                           onClick={() => void patchStep(v.id, "next")}
                           className="rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 py-1.5 text-xs font-semibold text-white shadow-md hover:brightness-105 disabled:opacity-50"
                           title={
-                            safeStep >= CALIBRATION_STEPS.length - 1
+                            atLast
                               ? "Mark calibration finished"
                               : nextLabel
                                 ? `Next: ${nextLabel}`
                                 : undefined
                           }
                         >
-                          {safeStep >= CALIBRATION_STEPS.length - 1 ? "Finish" : "Next"}
-                          {nextLabel && (
+                          {atLast ? "Finish" : "Next"}
+                          {nextLabel && !atLast && (
                             <span className="hidden font-normal sm:inline">
                               {" "}
                               ({nextLabel})
