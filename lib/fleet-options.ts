@@ -16,3 +16,15 @@ export const OWNER_DROPDOWN_OPTIONS = [
 ] as const;
 
 export const OTHERS_VEHICLE_VALUE = "Others";
+
+/** Default link labels (Links panel on the tracker). */
+export const DEFAULT_LINK_OPTION_NAMES = [
+  "Target-Based Calibration - Data Offload",
+  "Target-Based Calibration - Monitoring [Slack]",
+  "Target-Based Calibration - PR",
+  "DC Run Request [Slack]",
+  "Target-Less - Data Ingestion",
+  "Target-Less - PR",
+  "ADAS Verification Run Request [Slack]",
+  "ADAS Verification Run - Data Ingestion",
+] as const;

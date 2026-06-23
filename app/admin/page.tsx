@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { CalibrationVehicleRow } from "@/lib/types";
 import type { AdminChangeLogRow } from "@/lib/admin-change-log-db";
+import type { LinkOptionRow } from "@/lib/link-options-db";
 import type { OwnerOptionRow } from "@/lib/owner-options-db";
 import type { VehicleOptionRow } from "@/lib/vehicle-options-db";
 import type { WorkflowStepRow } from "@/lib/workflow-steps-db";
@@ -29,6 +30,8 @@ export default function AdminPage() {
   const [workflowPersisted, setWorkflowPersisted] = useState(true);
   const [newStepTitle, setNewStepTitle] = useState("");
   const [stepEditDraft, setStepEditDraft] = useState<Record<string, string>>({});
+  const [linkOptions, setLinkOptions] = useState<LinkOptionRow[]>([]);
+  const [newLinkName, setNewLinkName] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [newOwnerName, setNewOwnerName] = useState("");
@@ -66,6 +69,7 @@ export default function AdminPage() {
     setVehicles((j.vehicles as CalibrationVehicleRow[]) ?? []);
     setOwners((j.owners as OwnerOptionRow[]) ?? []);
     setVehicleOptions((j.vehicleOptions as VehicleOptionRow[]) ?? []);
+    setLinkOptions((j.linkOptions as LinkOptionRow[]) ?? []);
     setDefaultTrackerOwner(
       typeof j.activeCalibrationOwner === "string" ? j.activeCalibrationOwner : "",
     );
@@ -115,6 +119,7 @@ export default function AdminPage() {
     setVehicles([]);
     setOwners([]);
     setVehicleOptions([]);
+    setLinkOptions([]);
     setDefaultTrackerOwner("");
     setWorkflowSteps([]);
     setWorkflowPersisted(true);
@@ -302,20 +307,6 @@ export default function AdminPage() {
     }
   };
 
-  const saveAdminStepLink = async (vehicleId: string, stepIndex: number, url: string) => {
-    const res = await fetch(`/api/admin/vehicles/${vehicleId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ step_link: { step_index: stepIndex, url: url.trim() } }),
-    });
-    const j = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      alert(typeof j.error === "string" ? j.error : "Could not save link");
-      return;
-    }
-    await loadAdminData();
-  };
-
   const deleteWorkflowStepRow = async (id: string) => {
     if (!confirm("Delete this step? Active vehicles on this index will shift to the next label.")) return;
     const res = await fetch(`/api/admin/workflow-steps/${id}`, { method: "DELETE" });
@@ -329,6 +320,49 @@ export default function AdminPage() {
     } else {
       await loadAdminData();
     }
+  };
+
+  const addLinkOption = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newLinkName.trim();
+    if (!name) return;
+    const res = await fetch("/api/admin/link-options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(typeof j.error === "string" ? j.error : "Could not add link name");
+      return;
+    }
+    setNewLinkName("");
+    await loadAdminData();
+  };
+
+  const removeLinkOption = async (id: string) => {
+    if (!confirm("Remove this link name from the tracker Links panel?")) return;
+    const res = await fetch(`/api/admin/link-options/${id}`, { method: "DELETE" });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(typeof j.error === "string" ? j.error : "Delete failed");
+      return;
+    }
+    await loadAdminData();
+  };
+
+  const saveAdminStepLink = async (vehicleId: string, linkIndex: number, url: string) => {
+    const res = await fetch(`/api/admin/vehicles/${vehicleId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step_link: { step_index: linkIndex, url: url.trim() } }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(typeof j.error === "string" ? j.error : "Could not save link");
+      return;
+    }
+    await loadAdminData();
   };
 
   const stepLabelForVehicle = (stepIndex: number) => {
@@ -447,7 +481,7 @@ export default function AdminPage() {
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
         <h2 className="text-lg font-semibold text-slate-900">Calibration steps</h2>
         <p className="mt-1 text-xs text-slate-500">
-          Order matches the tracker (&quot;Next&quot; / &quot;Finish&quot;). Run{" "}
+          Workflow order on the tracker (&quot;Next&quot; / &quot;Finish&quot;). Run{" "}
           <code className="rounded bg-slate-100 px-1">004_calibration_workflow_steps.sql</code> on
           Postgres to enable editing (until then, defaults are read-only).
         </p>
@@ -530,6 +564,55 @@ export default function AdminPage() {
                     Remove
                   </button>
                 </div>
+              </li>
+            ))}
+        </ul>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
+        <h2 className="text-lg font-semibold text-slate-900">Link names (Links panel)</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Labels shown in the tracker <strong>Links</strong> dropdown only — workflow step names are
+          unchanged. Run{" "}
+          <code className="rounded bg-slate-100 px-1">012_restore_workflow_add_link_options.sql</code>{" "}
+          on Postgres if the table is missing.
+        </p>
+        <form onSubmit={addLinkOption} className="mt-4 flex flex-wrap gap-2">
+          <input
+            value={newLinkName}
+            onChange={(e) => setNewLinkName(e.target.value)}
+            placeholder="Link label"
+            className="min-w-[200px] flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-teal-400 focus:ring-2 focus:ring-teal-100"
+          />
+          <button
+            type="submit"
+            className="rounded-xl bg-gradient-to-r from-teal-600 to-cyan-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm"
+          >
+            Add
+          </button>
+        </form>
+        <ul className="mt-4 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/50">
+          {linkOptions.length === 0 && (
+            <li className="px-4 py-6 text-center text-sm text-slate-500">No link names.</li>
+          )}
+          {[...linkOptions]
+            .sort((a, b) => a.sort_order - b.sort_order)
+            .map((lo, idx) => (
+              <li
+                key={lo.id}
+                className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm text-slate-800"
+              >
+                <span>
+                  <span className="mr-2 text-xs font-semibold text-slate-500">#{idx + 1}</span>
+                  {lo.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void removeLinkOption(lo.id)}
+                  className="rounded-lg border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-800 hover:bg-red-100"
+                >
+                  Remove
+                </button>
               </li>
             ))}
         </ul>
@@ -729,24 +812,22 @@ export default function AdminPage() {
                     ) : (
                       <div className="space-y-1">
                         <div>{stepLabelForVehicle(v.step_index)}</div>
-                        {workflowSteps
-                          .filter((s) => s.link_enabled)
-                          .slice()
-                          .sort((a, b) => a.position - b.position)
-                          .map((s) => {
-                            const saved = v.step_links?.[String(s.position)] ?? "";
+                        {[...linkOptions]
+                          .sort((a, b) => a.sort_order - b.sort_order)
+                          .map((lo) => {
+                            const saved = v.step_links?.[String(lo.sort_order)] ?? "";
                             return (
-                              <div key={s.id} className="flex flex-wrap items-center gap-1 text-xs">
-                                <span className="text-slate-500">{s.title}:</span>
+                              <div key={lo.id} className="flex flex-wrap items-center gap-1 text-xs">
+                                <span className="text-slate-500">{lo.name}:</span>
                                 <input
-                                  key={`${v.id}-${s.position}-${saved}`}
+                                  key={`${v.id}-${lo.sort_order}-${saved}`}
                                   defaultValue={saved}
                                   placeholder="https://…"
                                   className="min-w-[10rem] flex-1 rounded border border-slate-200 px-1.5 py-0.5"
                                   onBlur={(e) => {
                                     const next = e.target.value.trim();
                                     if (next !== saved) {
-                                      void saveAdminStepLink(v.id, s.position, next);
+                                      void saveAdminStepLink(v.id, lo.sort_order, next);
                                     }
                                   }}
                                 />

@@ -14,6 +14,9 @@
     "db:apply-008": "node scripts/apply-migration-008.mjs",
     "db:apply-009": "node scripts/apply-migration-009.mjs",
     "db:apply-010": "node scripts/apply-migration-010.mjs",
+    "db:apply-011": "node scripts/apply-migration-011.mjs",
+    "db:apply-012": "node scripts/apply-migration-012.mjs",
+    "db:apply-013": "node scripts/apply-migration-013.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"

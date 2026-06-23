@@ -5,8 +5,7 @@ import {
   updateCalibrationVehicleStepLink,
 } from "@/lib/calibration-db";
 import { requireAdminResponse } from "@/lib/admin-route";
-import { listWorkflowSteps } from "@/lib/workflow-steps-db";
-import { isValidStepIndex } from "@/lib/workflow";
+import { isValidLinkIndex } from "@/lib/link-options-db";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -68,9 +67,8 @@ export async function PATCH(request: Request, context: Params) {
     }
 
     try {
-      const steps = await listWorkflowSteps();
-      if (!isValidStepIndex(steps.length, stepIndex)) {
-        return NextResponse.json({ error: "Invalid step_index" }, { status: 400 });
+      if (!(await isValidLinkIndex(stepIndex))) {
+        return NextResponse.json({ error: "Invalid link index" }, { status: 400 });
       }
       const updated = await updateCalibrationVehicleStepLink(id, stepIndex, url);
       if (!updated) {

@@ -5,15 +5,18 @@ import {
   listCalibrationVehicles,
 } from "@/lib/calibration-db";
 import { ensureVehicleOption } from "@/lib/vehicle-options-db";
+import { listLinkOptions } from "@/lib/link-options-db";
 import { listWorkflowSteps } from "@/lib/workflow-steps-db";
 
 export async function GET() {
   try {
     const vehicles = await listCalibrationVehicles();
     const steps = await listWorkflowSteps();
+    const linkOptions = await listLinkOptions();
     return NextResponse.json({
       vehicles,
       steps,
+      linkOptions,
       storageBackend: isMemoryBackend() ? "memory" : "postgres",
     });
   } catch (e) {

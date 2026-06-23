@@ -132,10 +132,14 @@ export async function insertWorkflowStep(title: string): Promise<WorkflowStepRow
 
   const pool = getPool();
   const res = await pool.query<Record<string, unknown>>(
-    `insert into public.calibration_workflow_steps (title, position)
-     values ($1, (select coalesce(max(position), -1) + 1 from public.calibration_workflow_steps))
+    `insert into public.calibration_workflow_steps (title, position, link_enabled)
+     values (
+       $1,
+       (select coalesce(max(position), -1) + 1 from public.calibration_workflow_steps),
+       $2
+     )
      returning id, title, position, coalesce(link_enabled, false) as link_enabled`,
-    [trimmed],
+      [trimmed, stepTitleHasLinkField(trimmed)],
   );
   const r = res.rows[0];
   if (!r) throw new Error("Insert returned no row");

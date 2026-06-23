@@ -4,6 +4,7 @@ import { listTrackerOwnerChangeLogs } from "@/lib/admin-change-log-db";
 import { getActiveCalibrationOwner } from "@/lib/calibration-settings-db";
 import { isMemoryBackend, listCalibrationVehicles } from "@/lib/calibration-db";
 import { listOwnerRows } from "@/lib/owner-options-db";
+import { listLinkOptions } from "@/lib/link-options-db";
 import { listVehicleRows } from "@/lib/vehicle-options-db";
 import { listWorkflowSteps, workflowStepsArePersisted } from "@/lib/workflow-steps-db";
 
@@ -16,6 +17,7 @@ export async function GET() {
     const vehicles = await listCalibrationVehicles();
     const owners = await listOwnerRows();
     const vehicleOptions = await listVehicleRows();
+    const linkOptions = await listLinkOptions();
     const activeCalibrationOwner = await getActiveCalibrationOwner();
     const steps = await listWorkflowSteps();
     const persisted = await workflowStepsArePersisted();
@@ -24,6 +26,7 @@ export async function GET() {
       vehicles,
       owners,
       vehicleOptions,
+      linkOptions,
       activeCalibrationOwner,
       steps,
       persisted,

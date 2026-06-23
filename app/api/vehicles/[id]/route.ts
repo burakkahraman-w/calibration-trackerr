@@ -7,6 +7,7 @@ import {
 } from "@/lib/calibration-db";
 import { isValidStepIndex } from "@/lib/workflow";
 import { listWorkflowSteps } from "@/lib/workflow-steps-db";
+import { isValidLinkIndex } from "@/lib/link-options-db";
 import { listOwnerOptions } from "@/lib/owner-options-db";
 import { appendAdminChangeLog, formatLogValue } from "@/lib/admin-change-log-db";
 
@@ -42,13 +43,8 @@ export async function PATCH(request: Request, context: Params) {
     }
 
     try {
-      const steps = await listWorkflowSteps();
-      if (!isValidStepIndex(steps.length, stepIndex)) {
-        return NextResponse.json({ error: "Invalid step_index" }, { status: 400 });
-      }
-      const step = steps[stepIndex];
-      if (!step?.link_enabled) {
-        return NextResponse.json({ error: "Link field is not enabled for this step" }, { status: 400 });
+      if (!(await isValidLinkIndex(stepIndex))) {
+        return NextResponse.json({ error: "Invalid link index" }, { status: 400 });
       }
 
       const row = await getCalibrationVehicleById(id);

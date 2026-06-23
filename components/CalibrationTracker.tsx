@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState, Fragment } from "react";
 import type { CalibrationVehicleRow } from "@/lib/types";
 import type { WorkflowStepRow } from "@/lib/workflow-steps-db";
+import type { LinkOptionRow } from "@/lib/link-options-db";
 import {
   DEFAULT_FLEET_VEHICLE_OPTIONS,
+  DEFAULT_LINK_OPTION_NAMES,
   OWNER_DROPDOWN_OPTIONS,
   OTHERS_VEHICLE_VALUE,
 } from "@/lib/fleet-options";
@@ -14,7 +16,6 @@ import {
   prevStepLabel,
   stepColorsAt,
 } from "@/lib/workflow";
-import { stepTitleHasLinkField } from "@/lib/step-links-config";
 
 function formatPerformed(iso: string) {
   const d = new Date(iso);
@@ -29,6 +30,14 @@ function formatCompleted(iso: string) {
   const date = new Intl.DateTimeFormat(undefined, { dateStyle: "short" }).format(d);
   const time = new Intl.DateTimeFormat(undefined, { timeStyle: "short" }).format(d);
   return { date, time };
+}
+
+function savedLinkHref(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t)) return t;
+  if (/^[\w.-]+\.[a-z]{2,}([\/?#]|$)/i.test(t)) return `https://${t}`;
+  return null;
 }
 
 /** Supabase / Postgres blocks new connections after repeated bad logins; slow polling avoids extending it. */
@@ -54,7 +63,13 @@ export function CalibrationTracker() {
   const [ownerNames, setOwnerNames] = useState<string[]>(() => [...OWNER_DROPDOWN_OPTIONS]);
   const [vehicleNames, setVehicleNames] = useState<string[]>(() => [...DEFAULT_FLEET_VEHICLE_OPTIONS]);
   const [stepTitles, setStepTitles] = useState<string[]>(() => [...DEFAULT_CALIBRATION_STEPS]);
-  const [workflowSteps, setWorkflowSteps] = useState<WorkflowStepRow[]>([]);
+  const [linkOptions, setLinkOptions] = useState<LinkOptionRow[]>(() =>
+    DEFAULT_LINK_OPTION_NAMES.map((name, sort_order) => ({
+      id: `default-${sort_order}`,
+      name,
+      sort_order,
+    })),
+  );
   const [linkDrafts, setLinkDrafts] = useState<Record<string, Record<string, string>>>({});
   const [linkBusy, setLinkBusy] = useState<string | null>(null);
   const [expandedLinkRows, setExpandedLinkRows] = useState<Set<string>>(() => new Set());
@@ -124,10 +139,15 @@ export function CalibrationTracker() {
     if (Array.isArray(json.steps)) {
       const rows = json.steps as WorkflowStepRow[];
       const sorted = [...rows].sort((a, b) => Number(a.position) - Number(b.position));
-      setWorkflowSteps(sorted);
       const titles = sorted.map((r) => String(r.title ?? "")).filter((t) => t.length > 0);
       if (titles.length > 0) {
         setStepTitles(titles);
+      }
+    }
+    if (Array.isArray(json.linkOptions)) {
+      const rows = json.linkOptions as LinkOptionRow[];
+      if (rows.length > 0) {
+        setLinkOptions([...rows].sort((a, b) => a.sort_order - b.sort_order));
       }
     }
   }, []);
@@ -479,19 +499,10 @@ export function CalibrationTracker() {
                 const atLast = n > 0 && safeStep >= n - 1;
                 const label = n > 0 ? stepTitles[safeStep] : "—";
                 const stepLinks = v.step_links ?? {};
-                const allSteps =
-                  workflowSteps.length > 0
-                    ? [...workflowSteps].sort((a, b) => a.position - b.position)
-                    : stepTitles.map((title, position) => ({
-                        id: String(position),
-                        title,
-                        position,
-                        link_enabled: stepTitleHasLinkField(title),
-                      }));
-                const linkSteps = allSteps.filter((s) => s.link_enabled);
+                const sortedLinks = [...linkOptions].sort((a, b) => a.sort_order - b.sort_order);
                 const linksOpen = expandedLinkRows.has(v.id);
-                const savedLinkCount = linkSteps.filter(
-                  (ws) => (stepLinks[String(ws.position)] ?? "").length > 0,
+                const savedLinkCount = sortedLinks.filter(
+                  (lo) => (stepLinks[String(lo.sort_order)] ?? "").length > 0,
                 ).length;
                 return (
                   <Fragment key={v.id}>
@@ -570,7 +581,7 @@ export function CalibrationTracker() {
                             <span className="hidden font-normal sm:inline"> ({nextLabel})</span>
                           )}
                         </button>
-                        {linkSteps.length > 0 && (
+                        {sortedLinks.length > 0 && (
                           <button
                             type="button"
                             onClick={() => toggleLinkPanel(v.id)}
@@ -588,35 +599,34 @@ export function CalibrationTracker() {
                       </div>
                     </td>
                   </tr>
-                  {linksOpen && linkSteps.length > 0 && (
+                  {linksOpen && sortedLinks.length > 0 && (
                     <tr className="border-b border-slate-100 bg-white">
                       <td colSpan={5} className="px-4 py-3">
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                          {linkSteps.map((ws) => {
-                            const idx = ws.position;
+                          {sortedLinks.map((lo) => {
+                            const idx = lo.sort_order;
                             const saved = stepLinks[String(idx)] ?? "";
                             const draft = linkDrafts[v.id]?.[String(idx)] ?? saved;
                             const busy = linkBusy === `${v.id}:${idx}`;
-                            const isCurrent = idx === safeStep;
                             return (
                               <div
-                                key={ws.id}
-                                className={`rounded-lg border p-3 text-xs ${
-                                  isCurrent
-                                    ? "border-violet-200 bg-violet-50/30"
-                                    : "border-slate-200 bg-slate-50/50"
-                                }`}
+                                key={lo.id}
+                                className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 text-xs"
                               >
-                                <p className="mb-1.5 font-medium text-slate-800">{ws.title}</p>
+                                <p className="mb-1.5 font-medium text-slate-800">{lo.name}</p>
                                 {saved ? (
-                                  <a
-                                    href={saved}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="block truncate text-sky-700 underline hover:text-sky-900"
-                                  >
-                                    {saved}
-                                  </a>
+                                  savedLinkHref(saved) ? (
+                                    <a
+                                      href={savedLinkHref(saved)!}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="block truncate text-sky-700 underline hover:text-sky-900"
+                                    >
+                                      {saved}
+                                    </a>
+                                  ) : (
+                                    <span className="block truncate text-slate-700">{saved}</span>
+                                  )
                                 ) : (
                                   <>
                                     <input
