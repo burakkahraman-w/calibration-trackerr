@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, Fragment } from "react";
 import type { CalibrationVehicleRow } from "@/lib/types";
+import type { WorkflowStepRow } from "@/lib/workflow-steps-db";
 import {
+  DEFAULT_FLEET_VEHICLE_OPTIONS,
   OWNER_DROPDOWN_OPTIONS,
   OTHERS_VEHICLE_VALUE,
-  VEHICLE_DROPDOWN_OPTIONS,
 } from "@/lib/fleet-options";
 import {
   DEFAULT_CALIBRATION_STEPS,
@@ -13,6 +14,7 @@ import {
   prevStepLabel,
   stepColorsAt,
 } from "@/lib/workflow";
+import { stepTitleHasLinkField } from "@/lib/step-links-config";
 
 function formatPerformed(iso: string) {
   const d = new Date(iso);
@@ -44,13 +46,30 @@ export function CalibrationTracker() {
   const [vehicleSelect, setVehicleSelect] = useState("");
   const [otherVehicleName, setOtherVehicleName] = useState("");
   const [ownerSelect, setOwnerSelect] = useState("");
+  const [reason, setReason] = useState("");
+  const [jiraTicket, setJiraTicket] = useState("");
   const [performedAt, setPerformedAt] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [ownerNames, setOwnerNames] = useState<string[]>(() => [...OWNER_DROPDOWN_OPTIONS]);
+  const [vehicleNames, setVehicleNames] = useState<string[]>(() => [...DEFAULT_FLEET_VEHICLE_OPTIONS]);
   const [stepTitles, setStepTitles] = useState<string[]>(() => [...DEFAULT_CALIBRATION_STEPS]);
+  const [workflowSteps, setWorkflowSteps] = useState<WorkflowStepRow[]>([]);
+  const [linkDrafts, setLinkDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [linkBusy, setLinkBusy] = useState<string | null>(null);
+  const [expandedLinkRows, setExpandedLinkRows] = useState<Set<string>>(() => new Set());
   /** Admin-configured default owner; reapplied after starting a calibration when set. */
   const activeDefaultOwnerRef = useRef<string>("");
+
+  const fetchVehicleNames = useCallback(async () => {
+    const res = await fetch("/api/vehicle-options");
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return;
+    const names = json.vehicles;
+    if (Array.isArray(names) && names.every((x: unknown) => typeof x === "string")) {
+      setVehicleNames(names as string[]);
+    }
+  }, []);
 
   const fetchOwnerNames = useCallback(async () => {
     const res = await fetch("/api/owner-options");
@@ -69,6 +88,10 @@ export function CalibrationTracker() {
       setOwnerSelect((cur) => (cur === "" ? preset : cur));
     }
   }, []);
+
+  useEffect(() => {
+    void fetchVehicleNames();
+  }, [fetchVehicleNames]);
 
   useEffect(() => {
     void fetchOwnerNames();
@@ -99,11 +122,10 @@ export function CalibrationTracker() {
     }
     setVehicles((json.vehicles as CalibrationVehicleRow[]) ?? []);
     if (Array.isArray(json.steps)) {
-      const rows = json.steps as { title?: unknown; position?: unknown }[];
-      const titles = [...rows]
-        .sort((a, b) => Number(a.position) - Number(b.position))
-        .map((r) => String(r.title ?? ""))
-        .filter((t) => t.length > 0);
+      const rows = json.steps as WorkflowStepRow[];
+      const sorted = [...rows].sort((a, b) => Number(a.position) - Number(b.position));
+      setWorkflowSteps(sorted);
+      const titles = sorted.map((r) => String(r.title ?? "")).filter((t) => t.length > 0);
       if (titles.length > 0) {
         setStepTitles(titles);
       }
@@ -148,6 +170,14 @@ export function CalibrationTracker() {
       setFormError("Select an owner.");
       return;
     }
+    if (!reason.trim()) {
+      setFormError("Reason is required.");
+      return;
+    }
+    if (!jiraTicket.trim()) {
+      setFormError("Jira ticket is required.");
+      return;
+    }
     if (!performedAt) {
       setFormError("Date and time are required.");
       return;
@@ -165,6 +195,8 @@ export function CalibrationTracker() {
       body: JSON.stringify({
         vehicle_name: vehicleNameResolved,
         owner: ownerSelect,
+        reason: reason.trim(),
+        jira_ticket: jiraTicket.trim(),
         performed_at: performed.toISOString(),
       }),
     });
@@ -175,6 +207,8 @@ export function CalibrationTracker() {
     }
     setVehicleSelect("");
     setOtherVehicleName("");
+    setReason("");
+    setJiraTicket("");
     setOwnerSelect(activeDefaultOwnerRef.current);
     const created = json.vehicle as CalibrationVehicleRow | undefined;
     if (created) {
@@ -189,6 +223,62 @@ export function CalibrationTracker() {
       await fetchVehicles();
     }
     void fetchOwnerNames();
+    void fetchVehicleNames();
+  };
+
+  const toggleLinkPanel = (vehicleId: string) => {
+    setExpandedLinkRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(vehicleId)) next.delete(vehicleId);
+      else next.add(vehicleId);
+      return next;
+    });
+  };
+
+  const saveStepLink = async (vehicleId: string, stepIndex: number) => {
+    const draftKey = `${vehicleId}:${stepIndex}`;
+    const url = (linkDrafts[vehicleId]?.[String(stepIndex)] ?? "").trim();
+    setLinkBusy(draftKey);
+    setFormError(null);
+    const res = await fetch(`/api/vehicles/${vehicleId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step_link: { step_index: stepIndex, url } }),
+    });
+    const json = await res.json().catch(() => ({}));
+    setLinkBusy(null);
+    if (!res.ok) {
+      setFormError(typeof json.error === "string" ? json.error : "Could not save link");
+      return;
+    }
+    const updated = json.vehicle as CalibrationVehicleRow | undefined;
+    if (updated) {
+      setVehicles((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
+    } else {
+      await fetchVehicles();
+    }
+  };
+
+  const patchOwner = async (id: string, owner: string) => {
+    setBusyId(id);
+    setFormError(null);
+    const res = await fetch(`/api/vehicles/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ owner }),
+    });
+    const json = await res.json().catch(() => ({}));
+    setBusyId(null);
+    if (!res.ok) {
+      setFormError(typeof json.error === "string" ? json.error : "Could not update owner");
+      return;
+    }
+    const updated = json.vehicle as CalibrationVehicleRow | undefined;
+    if (updated) {
+      setVehicles((prev) => prev.map((v) => (v.id === updated.id ? updated : v)));
+    } else {
+      await fetchVehicles();
+    }
   };
 
   const patchStep = async (id: string, direction: "next" | "back") => {
@@ -255,9 +345,9 @@ export function CalibrationTracker() {
         </p>
         <form
           onSubmit={startCalibration}
-          className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-6"
+          className="mt-4 grid gap-4 sm:grid-cols-2"
         >
-          <label className="block text-sm font-medium text-slate-700 sm:col-span-2 lg:col-span-2">
+          <label className="block text-sm font-medium text-slate-700">
             Performing date &amp; time
             <input
               type="datetime-local"
@@ -266,7 +356,7 @@ export function CalibrationTracker() {
               className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200"
             />
           </label>
-          <label className="block text-sm font-medium text-slate-700 sm:col-span-2 lg:col-span-2">
+          <label className="block text-sm font-medium text-slate-700">
             Vehicle
             <select
               value={vehicleSelect}
@@ -277,15 +367,16 @@ export function CalibrationTracker() {
               className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200"
             >
               <option value="">Select vehicle…</option>
-              {VEHICLE_DROPDOWN_OPTIONS.map((v) => (
+              {vehicleNames.map((v) => (
                 <option key={v} value={v}>
                   {v}
                 </option>
               ))}
+              <option value={OTHERS_VEHICLE_VALUE}>Others</option>
             </select>
           </label>
           {vehicleSelect === OTHERS_VEHICLE_VALUE && (
-            <label className="block text-sm font-medium text-slate-700 sm:col-span-2 lg:col-span-2">
+            <label className="block text-sm font-medium text-slate-700 sm:col-span-2">
               Other vehicle name
               <input
                 value={otherVehicleName}
@@ -296,7 +387,7 @@ export function CalibrationTracker() {
               />
             </label>
           )}
-          <label className="block text-sm font-medium text-slate-700 sm:col-span-2 lg:col-span-2">
+          <label className="block text-sm font-medium text-slate-700">
             Owner
             <select
               value={ownerSelect}
@@ -311,7 +402,28 @@ export function CalibrationTracker() {
               ))}
             </select>
           </label>
-          <div className="flex items-end sm:col-span-2 lg:col-span-2">
+          <label className="block text-sm font-medium text-slate-700 sm:col-span-2">
+            Reason
+            <input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              required
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200"
+              placeholder="Why is this calibration being started?"
+              autoComplete="off"
+            />
+          </label>
+          <label className="block text-sm font-medium text-slate-700">
+            Jira ticket
+            <input
+              value={jiraTicket}
+              onChange={(e) => setJiraTicket(e.target.value)}
+              required
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-slate-900 shadow-sm focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-200"
+              autoComplete="off"
+            />
+          </label>
+          <div className="flex items-end sm:col-span-2">
             <button
               type="submit"
               className="w-full rounded-xl bg-gradient-to-r from-violet-600 to-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-md shadow-violet-300/50 transition hover:brightness-105 sm:w-auto"
@@ -366,13 +478,50 @@ export function CalibrationTracker() {
                 const nextDisabled = busyId === v.id;
                 const atLast = n > 0 && safeStep >= n - 1;
                 const label = n > 0 ? stepTitles[safeStep] : "—";
+                const stepLinks = v.step_links ?? {};
+                const allSteps =
+                  workflowSteps.length > 0
+                    ? [...workflowSteps].sort((a, b) => a.position - b.position)
+                    : stepTitles.map((title, position) => ({
+                        id: String(position),
+                        title,
+                        position,
+                        link_enabled: stepTitleHasLinkField(title),
+                      }));
+                const linkSteps = allSteps.filter((s) => s.link_enabled);
+                const linksOpen = expandedLinkRows.has(v.id);
+                const savedLinkCount = linkSteps.filter(
+                  (ws) => (stepLinks[String(ws.position)] ?? "").length > 0,
+                ).length;
                 return (
-                  <tr key={v.id} className={`border-b border-slate-100 ${colors.row}`}>
+                  <Fragment key={v.id}>
+                  <tr className={`border-b border-slate-100 ${colors.row}`}>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-700">
                       {formatPerformed(v.performed_at)}
                     </td>
                     <td className="px-4 py-3 font-medium text-slate-900">{v.vehicle_name}</td>
-                    <td className="px-4 py-3 text-slate-700">{v.owner || "—"}</td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={v.owner}
+                        disabled={busyId === v.id}
+                        onChange={(e) => {
+                          const next = e.target.value;
+                          if (next && next !== v.owner) void patchOwner(v.id, next);
+                        }}
+                        className="max-w-[180px] rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-900 shadow-sm disabled:opacity-50"
+                        aria-label={`Owner for ${v.vehicle_name}`}
+                      >
+                        {!v.owner && <option value="">Select owner…</option>}
+                        {ownerNames.map((o) => (
+                          <option key={o} value={o}>
+                            {o}
+                          </option>
+                        ))}
+                        {v.owner && !ownerNames.includes(v.owner) && (
+                          <option value={v.owner}>{v.owner}</option>
+                        )}
+                      </select>
+                    </td>
                     <td className="px-4 py-3">
                       <span className="inline-flex items-center gap-2">
                         <span
@@ -401,7 +550,7 @@ export function CalibrationTracker() {
                             <span className="hidden sm:inline"> ({prev})</span>
                           </button>
                         ) : (
-                          <span className="text-xs text-slate-400 sm:inline">No back (first step)</span>
+                          <span className="hidden text-xs text-slate-400 sm:inline">—</span>
                         )}
                         <button
                           type="button"
@@ -418,15 +567,91 @@ export function CalibrationTracker() {
                         >
                           {atLast ? "Finish" : "Next"}
                           {nextLabel && !atLast && (
-                            <span className="hidden font-normal sm:inline">
-                              {" "}
-                              ({nextLabel})
-                            </span>
+                            <span className="hidden font-normal sm:inline"> ({nextLabel})</span>
                           )}
                         </button>
+                        {linkSteps.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => toggleLinkPanel(v.id)}
+                            aria-expanded={linksOpen}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-medium shadow-sm ${
+                              linksOpen
+                                ? "border-sky-300 bg-sky-50 text-sky-900"
+                                : "border-slate-200 bg-white text-slate-800 hover:bg-slate-50"
+                            }`}
+                          >
+                            Links
+                            {savedLinkCount > 0 ? ` (${savedLinkCount})` : ""}
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
+                  {linksOpen && linkSteps.length > 0 && (
+                    <tr className="border-b border-slate-100 bg-white">
+                      <td colSpan={5} className="px-4 py-3">
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          {linkSteps.map((ws) => {
+                            const idx = ws.position;
+                            const saved = stepLinks[String(idx)] ?? "";
+                            const draft = linkDrafts[v.id]?.[String(idx)] ?? saved;
+                            const busy = linkBusy === `${v.id}:${idx}`;
+                            const isCurrent = idx === safeStep;
+                            return (
+                              <div
+                                key={ws.id}
+                                className={`rounded-lg border p-3 text-xs ${
+                                  isCurrent
+                                    ? "border-violet-200 bg-violet-50/30"
+                                    : "border-slate-200 bg-slate-50/50"
+                                }`}
+                              >
+                                <p className="mb-1.5 font-medium text-slate-800">{ws.title}</p>
+                                {saved ? (
+                                  <a
+                                    href={saved}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="block truncate text-sky-700 underline hover:text-sky-900"
+                                  >
+                                    {saved}
+                                  </a>
+                                ) : (
+                                  <>
+                                    <input
+                                      type="text"
+                                      value={draft}
+                                      onChange={(e) =>
+                                        setLinkDrafts((prev) => ({
+                                          ...prev,
+                                          [v.id]: {
+                                            ...(prev[v.id] ?? {}),
+                                            [String(idx)]: e.target.value,
+                                          },
+                                        }))
+                                      }
+                                      placeholder="https://…"
+                                      className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-slate-900"
+                                    />
+                                    <button
+                                      type="button"
+                                      disabled={busy || !draft.trim()}
+                                      onClick={() => void saveStepLink(v.id, idx)}
+                                      className="mt-1.5 rounded-lg bg-sky-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-sky-700 disabled:opacity-50"
+                                    >
+                                      {busy ? "Saving…" : "Save"}
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>

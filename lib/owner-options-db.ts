@@ -6,6 +6,9 @@ import { isMemoryBackend } from "@/lib/calibration-store-memory";
 
 export type OwnerOptionRow = { id: string; name: string; sort_order: number };
 
+const OWNERS_TABLE_MISSING_HINT =
+  "Owners table missing. Run db/migrations/003_calibration_owners.sql in the Supabase SQL editor, then try again.";
+
 const GLOBAL_OWNERS = "__calibration_tracker_owners__" as const;
 
 function ownerMap(): Map<string, OwnerOptionRow> {
@@ -116,9 +119,7 @@ export async function insertOwnerOption(name: string): Promise<OwnerOptionRow> {
     const err = e as { code?: string; message?: string };
     if (err.code === "23505") throw new Error("Owner already exists");
     if (err.code === "42P01" || /calibration_owners|does not exist/i.test(err.message ?? "")) {
-      throw new Error(
-        "Owners table missing. Run db/migrations/003_calibration_owners.sql in the Supabase SQL editor, then try again.",
-      );
+      throw new Error(OWNERS_TABLE_MISSING_HINT);
     }
     throw e;
   }
@@ -130,12 +131,21 @@ export async function deleteOwnerOption(id: string): Promise<boolean> {
   }
 
   if (id.startsWith("static-")) {
-    return false;
+    // listOwnerRows() uses these ids only when the table query failed (table missing).
+    throw new Error(OWNERS_TABLE_MISSING_HINT);
   }
 
   const pool = getPool();
-  const res: QueryResult = await pool.query(`delete from public.calibration_owners where id = $1`, [
-    id,
-  ]);
-  return res.rowCount != null && res.rowCount > 0;
+  try {
+    const res: QueryResult = await pool.query(`delete from public.calibration_owners where id = $1`, [
+      id,
+    ]);
+    return res.rowCount != null && res.rowCount > 0;
+  } catch (e) {
+    const err = e as { code?: string; message?: string };
+    if (err.code === "42P01" || /calibration_owners|does not exist/i.test(err.message ?? "")) {
+      throw new Error(OWNERS_TABLE_MISSING_HINT);
+    }
+    throw e;
+  }
 }

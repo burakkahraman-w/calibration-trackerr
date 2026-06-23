@@ -24,6 +24,9 @@ export async function listMemoryVehicles(): Promise<CalibrationVehicleRow[]> {
   const rows = Array.from(getMap().values()).map((r) => ({
     ...r,
     owner: r.owner ?? "",
+    reason: r.reason ?? "",
+    jira_ticket: r.jira_ticket ?? "",
+    step_links: r.step_links ?? {},
   }));
   rows.sort((a, b) => new Date(b.performed_at).getTime() - new Date(a.performed_at).getTime());
   return rows;
@@ -32,6 +35,8 @@ export async function listMemoryVehicles(): Promise<CalibrationVehicleRow[]> {
 export async function insertMemoryVehicle(input: {
   vehicle_name: string;
   owner: string;
+  reason: string;
+  jira_ticket: string;
   performed_at: Date;
 }): Promise<CalibrationVehicleRow> {
   const now = new Date().toISOString();
@@ -40,8 +45,11 @@ export async function insertMemoryVehicle(input: {
     id,
     vehicle_name: input.vehicle_name,
     owner: input.owner,
+    reason: input.reason,
+    jira_ticket: input.jira_ticket,
     performed_at: input.performed_at.toISOString(),
     step_index: 0,
+    step_links: {},
     is_completed: false,
     completed_at: null,
     created_at: now,
@@ -102,6 +110,31 @@ export async function deleteMemoryCompletedVehicles(): Promise<number> {
     }
   }
   return n;
+}
+
+export async function updateMemoryVehicleStepLink(
+  id: string,
+  stepIndex: number,
+  url: string,
+): Promise<CalibrationVehicleRow | null> {
+  const map = getMap();
+  const current = map.get(id);
+  if (!current) return null;
+  const key = String(stepIndex);
+  const nextLinks = { ...current.step_links };
+  const trimmed = url.trim();
+  if (trimmed) {
+    nextLinks[key] = trimmed;
+  } else {
+    delete nextLinks[key];
+  }
+  const updated: CalibrationVehicleRow = {
+    ...current,
+    step_links: nextLinks,
+    updated_at: new Date().toISOString(),
+  };
+  map.set(id, updated);
+  return updated;
 }
 
 export async function updateMemoryVehicleOwner(

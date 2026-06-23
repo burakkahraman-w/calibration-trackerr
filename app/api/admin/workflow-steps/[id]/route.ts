@@ -4,6 +4,7 @@ import {
   deleteWorkflowStep,
   listWorkflowSteps,
   moveWorkflowStep,
+  updateWorkflowStepLinkEnabled,
   updateWorkflowStepTitle,
   workflowStepsArePersisted,
 } from "@/lib/workflow-steps-db";
@@ -45,6 +46,16 @@ export async function PATCH(request: Request, context: Params) {
         return NextResponse.json({ error: "Step not found" }, { status: 404 });
       }
       return NextResponse.json({ steps });
+    }
+
+    if (typeof body === "object" && body !== null && "link_enabled" in body) {
+      const linkEnabled = Boolean((body as { link_enabled: unknown }).link_enabled);
+      const step = await updateWorkflowStepLinkEnabled(id, linkEnabled);
+      if (!step) {
+        return NextResponse.json({ error: "Step not found" }, { status: 404 });
+      }
+      const steps = await listWorkflowSteps();
+      return NextResponse.json({ step, steps });
     }
 
     const title =

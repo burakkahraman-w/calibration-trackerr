@@ -9,10 +9,30 @@ import {
   isMemoryBackend,
   listMemoryVehicles,
   updateMemoryVehicleOwner,
+  updateMemoryVehicleStepLink,
   updateMemoryVehicleStep as updateMemoryStep,
 } from "@/lib/calibration-store-memory";
 
-const ROW_SELECT = `id, vehicle_name, owner, performed_at, step_index, is_completed, completed_at, created_at, updated_at`;
+const ROW_SELECT = `id, vehicle_name, owner, reason, jira_ticket, performed_at, step_index, step_links, is_completed, completed_at, created_at, updated_at`;
+
+function parseStepLinks(raw: unknown): Record<string, string> {
+  if (raw == null) return {};
+  if (typeof raw === "object" && !Array.isArray(raw)) {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v === "string" && v.trim()) out[k] = v.trim();
+    }
+    return out;
+  }
+  if (typeof raw === "string") {
+    try {
+      return parseStepLinks(JSON.parse(raw));
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
 
 function iso(v: unknown): string {
   if (v instanceof Date) return v.toISOString();
@@ -25,8 +45,11 @@ function mapRow(row: Record<string, unknown>): CalibrationVehicleRow {
     id: String(row.id),
     vehicle_name: String(row.vehicle_name),
     owner: row.owner == null || row.owner === "" ? "" : String(row.owner),
+    reason: row.reason == null ? "" : String(row.reason),
+    jira_ticket: row.jira_ticket == null ? "" : String(row.jira_ticket),
     performed_at: iso(row.performed_at),
     step_index: Number(row.step_index),
+    step_links: parseStepLinks(row.step_links),
     is_completed: Boolean(row.is_completed),
     completed_at: row.completed_at == null ? null : iso(row.completed_at),
     created_at: iso(row.created_at),
@@ -60,6 +83,8 @@ export async function listCalibrationVehicles(): Promise<CalibrationVehicleRow[]
 export async function insertCalibrationVehicle(input: {
   vehicle_name: string;
   owner: string;
+  reason: string;
+  jira_ticket: string;
   performed_at: Date;
 }): Promise<CalibrationVehicleRow> {
   if (isMemoryBackend()) {
@@ -68,10 +93,16 @@ export async function insertCalibrationVehicle(input: {
 
   const pool = getPool();
   const res = await pool.query<Record<string, unknown>>(
-    `insert into public.calibration_vehicles (vehicle_name, owner, performed_at, step_index, is_completed)
-     values ($1, $2, $3, 0, false)
+    `insert into public.calibration_vehicles (vehicle_name, owner, reason, jira_ticket, performed_at, step_index, is_completed)
+     values ($1, $2, $3, $4, $5, 0, false)
      returning ${ROW_SELECT}`,
-    [input.vehicle_name, input.owner, input.performed_at.toISOString()],
+    [
+      input.vehicle_name,
+      input.owner,
+      input.reason,
+      input.jira_ticket,
+      input.performed_at.toISOString(),
+    ],
   );
   const row = firstRow(res);
   if (!row) throw new Error("Insert returned no row");
@@ -151,6 +182,32 @@ export async function deleteCompletedCalibrationVehicles(): Promise<number> {
   const pool = getPool();
   const res = await pool.query(`delete from public.calibration_vehicles where is_completed = true`);
   return res.rowCount ?? 0;
+}
+
+export async function updateCalibrationVehicleStepLink(
+  id: string,
+  stepIndex: number,
+  url: string,
+): Promise<CalibrationVehicleRow | null> {
+  const key = String(stepIndex);
+  const trimmed = url.trim();
+
+  if (isMemoryBackend()) {
+    return updateMemoryVehicleStepLink(id, stepIndex, trimmed);
+  }
+
+  const pool = getPool();
+  const res = await pool.query<Record<string, unknown>>(
+    `update public.calibration_vehicles
+     set step_links = case
+       when $3::text = '' then coalesce(step_links, '{}'::jsonb) - $2::text
+       else jsonb_set(coalesce(step_links, '{}'::jsonb), array[$2::text], to_jsonb($3::text), true)
+     end
+     where id = $1
+     returning ${ROW_SELECT}`,
+    [id, key, trimmed],
+  );
+  return firstRow(res);
 }
 
 export async function updateCalibrationVehicleOwner(

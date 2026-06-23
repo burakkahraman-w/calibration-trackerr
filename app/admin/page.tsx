@@ -3,9 +3,18 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type { CalibrationVehicleRow } from "@/lib/types";
+import type { AdminChangeLogRow } from "@/lib/admin-change-log-db";
 import type { OwnerOptionRow } from "@/lib/owner-options-db";
+import type { VehicleOptionRow } from "@/lib/vehicle-options-db";
 import type { WorkflowStepRow } from "@/lib/workflow-steps-db";
-import { OTHERS_VEHICLE_VALUE, VEHICLE_DROPDOWN_OPTIONS } from "@/lib/fleet-options";
+
+function formatLogTimestamp(iso: string) {
+  const d = new Date(iso);
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(d);
+}
 
 export default function AdminPage() {
   const [me, setMe] = useState<{ authenticated: boolean; configured: boolean } | null>(null);
@@ -15,6 +24,7 @@ export default function AdminPage() {
 
   const [vehicles, setVehicles] = useState<CalibrationVehicleRow[]>([]);
   const [owners, setOwners] = useState<OwnerOptionRow[]>([]);
+  const [vehicleOptions, setVehicleOptions] = useState<VehicleOptionRow[]>([]);
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStepRow[]>([]);
   const [workflowPersisted, setWorkflowPersisted] = useState(true);
   const [newStepTitle, setNewStepTitle] = useState("");
@@ -22,14 +32,11 @@ export default function AdminPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [newOwnerName, setNewOwnerName] = useState("");
-  const [addVehicleName, setAddVehicleName] = useState("");
-  const [addVehicleSelect, setAddVehicleSelect] = useState("");
-  const [addOtherVehicle, setAddOtherVehicle] = useState("");
-  const [addVehicleOwner, setAddVehicleOwner] = useState("");
-  const [addPerformedAt, setAddPerformedAt] = useState("");
+  const [newVehicleName, setNewVehicleName] = useState("");
   /** Pre-selected owner on the public tracker (admin-controlled). */
   const [defaultTrackerOwner, setDefaultTrackerOwner] = useState("");
   const [savingDefaultOwner, setSavingDefaultOwner] = useState(false);
+  const [changeLog, setChangeLog] = useState<AdminChangeLogRow[]>([]);
 
   const refreshMe = useCallback(async () => {
     setLoginError(null);
@@ -58,12 +65,14 @@ export default function AdminPage() {
     }
     setVehicles((j.vehicles as CalibrationVehicleRow[]) ?? []);
     setOwners((j.owners as OwnerOptionRow[]) ?? []);
+    setVehicleOptions((j.vehicleOptions as VehicleOptionRow[]) ?? []);
     setDefaultTrackerOwner(
       typeof j.activeCalibrationOwner === "string" ? j.activeCalibrationOwner : "",
     );
     const steps = (j.steps as WorkflowStepRow[]) ?? [];
     setWorkflowSteps([...steps].sort((a, b) => a.position - b.position));
     setWorkflowPersisted(Boolean(j.persisted));
+    setChangeLog((j.changeLog as AdminChangeLogRow[]) ?? []);
   }, []);
 
   useEffect(() => {
@@ -81,14 +90,6 @@ export default function AdminPage() {
     }
     setStepEditDraft(m);
   }, [workflowSteps]);
-
-  useEffect(() => {
-    const now = new Date();
-    const pad = (n: number) => String(n).padStart(2, "0");
-    setAddPerformedAt(
-      `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`,
-    );
-  }, []);
 
   const login = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,10 +114,12 @@ export default function AdminPage() {
     await fetch("/api/admin/logout", { method: "POST" });
     setVehicles([]);
     setOwners([]);
+    setVehicleOptions([]);
     setDefaultTrackerOwner("");
     setWorkflowSteps([]);
     setWorkflowPersisted(true);
     setStepEditDraft({});
+    setChangeLog([]);
     await refreshMe();
   };
 
@@ -191,44 +194,32 @@ export default function AdminPage() {
     }
   };
 
-  const addVehicleAdmin = async (e: React.FormEvent) => {
+  const addVehicleOption = async (e: React.FormEvent) => {
     e.preventDefault();
-    const typed = addVehicleName.trim();
-    const fromSelect =
-      addVehicleSelect === OTHERS_VEHICLE_VALUE
-        ? addOtherVehicle.trim()
-        : addVehicleSelect.trim();
-    const vehicleNameResolved = typed || fromSelect;
-    if (!vehicleNameResolved) {
-      alert("Vehicle is required.");
-      return;
-    }
-    if (!addVehicleOwner.trim()) {
-      alert("Owner is required.");
-      return;
-    }
-    const performed = new Date(addPerformedAt);
-    if (Number.isNaN(performed.getTime())) {
-      alert("Invalid date/time");
-      return;
-    }
-    const res = await fetch("/api/admin/vehicles", {
+    const name = newVehicleName.trim();
+    if (!name) return;
+    const res = await fetch("/api/admin/vehicle-options", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        vehicle_name: vehicleNameResolved,
-        owner: addVehicleOwner.trim(),
-        performed_at: performed.toISOString(),
-      }),
+      body: JSON.stringify({ name }),
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok) {
       alert(typeof j.error === "string" ? j.error : "Could not add vehicle");
       return;
     }
-    setAddVehicleSelect("");
-    setAddOtherVehicle("");
-    setAddVehicleName("");
+    setNewVehicleName("");
+    await loadAdminData();
+  };
+
+  const removeVehicleOption = async (id: string) => {
+    if (!confirm("Remove this vehicle from the dropdown list?")) return;
+    const res = await fetch(`/api/admin/vehicle-options/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      alert(typeof j.error === "string" ? j.error : "Delete failed");
+      return;
+    }
     await loadAdminData();
   };
 
@@ -309,6 +300,20 @@ export default function AdminPage() {
     } else {
       await loadAdminData();
     }
+  };
+
+  const saveAdminStepLink = async (vehicleId: string, stepIndex: number, url: string) => {
+    const res = await fetch(`/api/admin/vehicles/${vehicleId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step_link: { step_index: stepIndex, url: url.trim() } }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(typeof j.error === "string" ? j.error : "Could not save link");
+      return;
+    }
+    await loadAdminData();
   };
 
   const deleteWorkflowStepRow = async (id: string) => {
@@ -612,85 +617,52 @@ export default function AdminPage() {
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
-        <h2 className="text-lg font-semibold text-slate-900">Add vehicle</h2>
-        <p className="mt-1 text-xs text-slate-500">Same fields as the tracker.</p>
-        <form onSubmit={addVehicleAdmin} className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
-            Vehicle
-            <select
-              value={addVehicleSelect}
-              onChange={(e) => {
-                setAddVehicleSelect(e.target.value);
-                if (e.target.value !== OTHERS_VEHICLE_VALUE) setAddOtherVehicle("");
-              }}
-              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900"
-            >
-              <option value="">Select from fleet…</option>
-              {VEHICLE_DROPDOWN_OPTIONS.map((v) => (
-                <option key={v} value={v}>
-                  {v}
-                </option>
-              ))}
-            </select>
-          </label>
-          {addVehicleSelect === OTHERS_VEHICLE_VALUE && (
-            <label className="text-xs font-medium text-slate-600 sm:col-span-2">
-              Other vehicle name
-              <input
-                value={addOtherVehicle}
-                onChange={(e) => setAddOtherVehicle(e.target.value)}
-                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900"
-                placeholder="Custom ID or label"
-              />
-            </label>
-          )}
-          <label className="text-xs font-medium text-slate-600 sm:col-span-2">
-            Or type a vehicle name / ID directly
-            <input
-              value={addVehicleName}
-              onChange={(e) => setAddVehicleName(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900"
-              placeholder="Overrides dropdown when filled"
-            />
-          </label>
-          <label className="text-xs font-medium text-slate-600">
-            Owner
-            <select
-              value={addVehicleOwner}
-              onChange={(e) => setAddVehicleOwner(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900"
-            >
-              <option value="">Select…</option>
-              {owners.map((o) => (
-                <option key={o.id} value={o.name}>
-                  {o.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs font-medium text-slate-600">
-            Performed at
-            <input
-              type="datetime-local"
-              value={addPerformedAt}
-              onChange={(e) => setAddPerformedAt(e.target.value)}
-              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900"
-            />
-          </label>
-          <div className="flex items-end sm:col-span-2">
-            <button
-              type="submit"
-              className="rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-6 py-2.5 text-sm font-semibold text-white shadow-md"
-            >
-              Create row
-            </button>
-          </div>
+        <h2 className="text-lg font-semibold text-slate-900">Vehicles (dropdown)</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Manage the vehicle list on the public tracker. Names entered via{" "}
+          <strong>Others</strong> are added here automatically. Run{" "}
+          <code className="rounded bg-slate-100 px-1">009_calibration_vehicle_options.sql</code> on
+          Postgres if the table is missing.
+        </p>
+        <form onSubmit={addVehicleOption} className="mt-4 flex flex-wrap gap-2">
+          <input
+            value={newVehicleName}
+            onChange={(e) => setNewVehicleName(e.target.value)}
+            placeholder="Vehicle name or ID"
+            className="min-w-[200px] flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm text-slate-900 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+          />
+          <button
+            type="submit"
+            className="rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm"
+          >
+            Add
+          </button>
         </form>
+        <ul className="mt-4 divide-y divide-slate-100 rounded-xl border border-slate-200 bg-slate-50/50">
+          {vehicleOptions.length === 0 && (
+            <li className="px-4 py-6 text-center text-sm text-slate-500">No vehicles.</li>
+          )}
+          {vehicleOptions.map((v) => (
+            <li
+              key={v.id}
+              className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 text-sm text-slate-800"
+            >
+              <span>{v.name}</span>
+              <button
+                type="button"
+                onClick={() => void removeVehicleOption(v.id)}
+                className="rounded-lg border border-red-200 bg-red-50 px-3 py-1 text-xs font-semibold text-red-800 hover:bg-red-100"
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
       </section>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-lg font-semibold text-slate-900">All vehicles</h2>
+          <h2 className="text-lg font-semibold text-slate-900">All calibrations</h2>
           <button
             type="button"
             onClick={() => void clearCompleted()}
@@ -706,7 +678,9 @@ export default function AdminPage() {
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2">Vehicle</th>
                 <th className="px-3 py-2">Owner</th>
-                <th className="px-3 py-2">Step</th>
+                <th className="px-3 py-2">Reason</th>
+                <th className="px-3 py-2">Jira</th>
+                <th className="px-3 py-2">Step / links</th>
                 <th className="px-3 py-2 text-right">Actions</th>
               </tr>
             </thead>
@@ -745,8 +719,42 @@ export default function AdminPage() {
                       )}
                     </select>
                   </td>
+                  <td className="max-w-[140px] truncate px-3 py-2 text-slate-600" title={v.reason}>
+                    {v.reason || "—"}
+                  </td>
+                  <td className="px-3 py-2 text-slate-600">{v.jira_ticket || "—"}</td>
                   <td className="px-3 py-2 text-slate-600">
-                    {v.is_completed ? "—" : stepLabelForVehicle(v.step_index)}
+                    {v.is_completed ? (
+                      "—"
+                    ) : (
+                      <div className="space-y-1">
+                        <div>{stepLabelForVehicle(v.step_index)}</div>
+                        {workflowSteps
+                          .filter((s) => s.link_enabled)
+                          .slice()
+                          .sort((a, b) => a.position - b.position)
+                          .map((s) => {
+                            const saved = v.step_links?.[String(s.position)] ?? "";
+                            return (
+                              <div key={s.id} className="flex flex-wrap items-center gap-1 text-xs">
+                                <span className="text-slate-500">{s.title}:</span>
+                                <input
+                                  key={`${v.id}-${s.position}-${saved}`}
+                                  defaultValue={saved}
+                                  placeholder="https://…"
+                                  className="min-w-[10rem] flex-1 rounded border border-slate-200 px-1.5 py-0.5"
+                                  onBlur={(e) => {
+                                    const next = e.target.value.trim();
+                                    if (next !== saved) {
+                                      void saveAdminStepLink(v.id, s.position, next);
+                                    }
+                                  }}
+                                />
+                              </div>
+                            );
+                          })}
+                      </div>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <button
@@ -761,7 +769,7 @@ export default function AdminPage() {
               ))}
               {vehicles.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-slate-500">
+                  <td colSpan={7} className="px-3 py-8 text-center text-slate-500">
                     No vehicles.
                   </td>
                 </tr>
@@ -769,6 +777,31 @@ export default function AdminPage() {
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-md">
+        <h2 className="text-lg font-semibold text-slate-900">Owner change log</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Owner changes made on the public tracker, newest first.
+        </p>
+        <ul className="mt-4 max-h-96 divide-y divide-slate-100 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50/50">
+          {changeLog.length === 0 && (
+            <li className="px-4 py-6 text-center text-sm text-slate-500">
+              No owner changes logged yet.
+            </li>
+          )}
+          {changeLog.map((entry) => (
+            <li key={entry.id} className="px-4 py-3 text-sm text-slate-800">
+              <time
+                dateTime={entry.created_at}
+                className="block text-xs font-medium text-slate-500"
+              >
+                {formatLogTimestamp(entry.created_at)}
+              </time>
+              <p className="mt-1 leading-relaxed">{entry.message}</p>
+            </li>
+          ))}
+        </ul>
       </section>
     </div>
   );

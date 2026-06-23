@@ -1,12 +1,15 @@
 import { randomUUID } from "crypto";
 import { getPool } from "@/lib/db";
 import { DEFAULT_CALIBRATION_STEPS } from "@/lib/workflow";
+import { stepTitleHasLinkField } from "@/lib/step-links-config";
 import { isMemoryBackend } from "@/lib/calibration-store-memory";
 
 export type WorkflowStepRow = {
   id: string;
   title: string;
   position: number;
+  /** When true, the public tracker shows a collapsible link field for this step. */
+  link_enabled: boolean;
 };
 
 const GLOBAL_STEPS = "__calibration_tracker_workflow_steps__" as const;
@@ -18,6 +21,7 @@ function defaultRows(): WorkflowStepRow[] {
     id: `${DEFAULT_ID_PREFIX}${position}`,
     title,
     position,
+    link_enabled: stepTitleHasLinkField(title),
   }));
 }
 
@@ -67,7 +71,7 @@ async function loadStepsAndPersisted(): Promise<{ steps: WorkflowStepRow[]; pers
   const pool = getPool();
   try {
     const res = await pool.query<Record<string, unknown>>(
-      `select id, title, position
+      `select id, title, position, coalesce(link_enabled, false) as link_enabled
        from public.calibration_workflow_steps
        order by position asc`,
     );
@@ -75,12 +79,29 @@ async function loadStepsAndPersisted(): Promise<{ steps: WorkflowStepRow[]; pers
       id: String(r.id),
       title: String(r.title),
       position: Number(r.position),
+      link_enabled: Boolean(r.link_enabled),
     }));
     const out = { steps, persisted: true };
     stepsCache = { at: now, ...out };
     return out;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (/link_enabled|column.*does not exist/i.test(msg)) {
+      const res = await pool.query<Record<string, unknown>>(
+        `select id, title, position
+         from public.calibration_workflow_steps
+         order by position asc`,
+      );
+      const steps = res.rows.map((r) => ({
+        id: String(r.id),
+        title: String(r.title),
+        position: Number(r.position),
+        link_enabled: stepTitleHasLinkField(String(r.title)),
+      }));
+      const out = { steps, persisted: true };
+      stepsCache = { at: now, ...out };
+      return out;
+    }
     if (!/calibration_workflow_steps|does not exist|undefined_table/i.test(msg)) throw e;
     const steps = defaultRows();
     const out = { steps, persisted: false };
@@ -104,7 +125,7 @@ export async function insertWorkflowStep(title: string): Promise<WorkflowStepRow
   if (isMemoryBackend()) {
     const steps = memorySteps();
     const nextPos = steps.length === 0 ? 0 : Math.max(...steps.map((s) => s.position)) + 1;
-    const row: WorkflowStepRow = { id: randomUUID(), title: trimmed, position: nextPos };
+    const row: WorkflowStepRow = { id: randomUUID(), title: trimmed, position: nextPos, link_enabled: stepTitleHasLinkField(trimmed) };
     steps.push(row);
     return row;
   }
@@ -113,13 +134,18 @@ export async function insertWorkflowStep(title: string): Promise<WorkflowStepRow
   const res = await pool.query<Record<string, unknown>>(
     `insert into public.calibration_workflow_steps (title, position)
      values ($1, (select coalesce(max(position), -1) + 1 from public.calibration_workflow_steps))
-     returning id, title, position`,
+     returning id, title, position, coalesce(link_enabled, false) as link_enabled`,
     [trimmed],
   );
   const r = res.rows[0];
   if (!r) throw new Error("Insert returned no row");
   invalidateWorkflowStepsCache();
-  return { id: String(r.id), title: String(r.title), position: Number(r.position) };
+  return {
+    id: String(r.id),
+    title: String(r.title),
+    position: Number(r.position),
+    link_enabled: Boolean(r.link_enabled),
+  };
 }
 
 export async function updateWorkflowStepTitle(id: string, title: string): Promise<WorkflowStepRow | null> {
@@ -140,12 +166,46 @@ export async function updateWorkflowStepTitle(id: string, title: string): Promis
     `update public.calibration_workflow_steps
      set title = $2
      where id = $1::uuid
-     returning id, title, position`,
+     returning id, title, position, coalesce(link_enabled, false) as link_enabled`,
     [id, trimmed],
   );
   const r = res.rows[0];
   if (r) invalidateWorkflowStepsCache();
-  return r ? { id: String(r.id), title: String(r.title), position: Number(r.position) } : null;
+  return r ? { id: String(r.id), title: String(r.title), position: Number(r.position), link_enabled: Boolean(r.link_enabled) } : null;
+}
+
+export async function updateWorkflowStepLinkEnabled(
+  id: string,
+  linkEnabled: boolean,
+): Promise<WorkflowStepRow | null> {
+  if (isDefaultId(id)) throw new Error(workflowStepsTableMissingMessage());
+
+  if (isMemoryBackend()) {
+    const steps = memorySteps();
+    const row = steps.find((s) => s.id === id);
+    if (!row) return null;
+    row.link_enabled = linkEnabled;
+    return { ...row };
+  }
+
+  const pool = getPool();
+  const res = await pool.query<Record<string, unknown>>(
+    `update public.calibration_workflow_steps
+     set link_enabled = $2
+     where id = $1::uuid
+     returning id, title, position, link_enabled`,
+    [id, linkEnabled],
+  );
+  const r = res.rows[0];
+  if (r) invalidateWorkflowStepsCache();
+  return r
+    ? {
+        id: String(r.id),
+        title: String(r.title),
+        position: Number(r.position),
+        link_enabled: Boolean(r.link_enabled),
+      }
+    : null;
 }
 
 export async function deleteWorkflowStep(id: string): Promise<boolean> {

@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Suspense } from "react";
 import "./globals.css";
 import { SecretAdminButton } from "@/components/SecretAdminButton";
+import { ContactHelpButton } from "@/components/ContactHelpButton";
 
 export const metadata: Metadata = {
   title: "Vehicle calibration tracker",
@@ -15,6 +16,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
       <body className="min-h-screen bg-[#eef2fa] font-sans text-slate-900 antialiased">
         {children}
         <Suspense fallback={null}>
+          <ContactHelpButton />
           <SecretAdminButton />
         </Suspense>
       </body>
