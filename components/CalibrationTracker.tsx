@@ -745,9 +745,25 @@ export function CalibrationTracker() {
               )}
               {completed.map((v) => {
                 const when = v.completed_at ? formatCompleted(v.completed_at) : null;
+                const reasonText = v.reason?.trim() ?? "";
                 return (
                   <tr key={v.id} className="border-b border-slate-100">
-                    <td className="px-4 py-3 font-medium text-slate-900">{v.vehicle_name}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      <span
+                        className={
+                          reasonText
+                            ? "cursor-help border-b border-dotted border-slate-400"
+                            : undefined
+                        }
+                        onMouseEnter={(e) => {
+                          if (!reasonText) return;
+                          showReasonTip(e, reasonText);
+                        }}
+                        onMouseLeave={() => setReasonTip(null)}
+                      >
+                        {v.vehicle_name}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-slate-700">{v.owner || "—"}</td>
                     <td className="px-4 py-3 text-slate-600">
                       {when ? (
