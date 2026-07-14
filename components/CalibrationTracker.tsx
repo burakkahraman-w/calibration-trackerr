@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, Fragment } from "react";
+import { createPortal } from "react-dom";
 import type { CalibrationVehicleRow } from "@/lib/types";
 import type { WorkflowStepRow } from "@/lib/workflow-steps-db";
 import type { LinkOptionRow } from "@/lib/link-options-db";
@@ -78,6 +79,19 @@ export function CalibrationTracker() {
     x: number;
     y: number;
   } | null>(null);
+
+  const REASON_TIP_MAX_W = 320;
+  const REASON_TIP_PAD = 12;
+
+  function showReasonTip(e: React.MouseEvent<HTMLSpanElement>, text: string) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const halfW = REASON_TIP_MAX_W / 2;
+    const x = Math.max(
+      REASON_TIP_PAD + halfW,
+      Math.min(rect.left + rect.width / 2, window.innerWidth - REASON_TIP_PAD - halfW)
+    );
+    setReasonTip({ text, x, y: rect.bottom + 6 });
+  }
   /** Admin-configured default owner; reapplied after starting a calibration when set. */
   const activeDefaultOwnerRef = useRef<string>("");
 
@@ -525,12 +539,7 @@ export function CalibrationTracker() {
                         }
                         onMouseEnter={(e) => {
                           if (!reasonText) return;
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setReasonTip({
-                            text: reasonText,
-                            x: rect.left + rect.width / 2,
-                            y: rect.top,
-                          });
+                          showReasonTip(e, reasonText);
                         }}
                         onMouseLeave={() => setReasonTip(null)}
                       >
@@ -737,18 +746,20 @@ export function CalibrationTracker() {
         </div>
       </section>
 
-      {reasonTip && (
-        <div
-          role="tooltip"
-          className="pointer-events-none fixed z-[200] max-w-sm -translate-x-1/2 -translate-y-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs leading-snug text-white shadow-xl"
-          style={{ left: reasonTip.x, top: reasonTip.y - 6 }}
-        >
-          <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
-            Reason
-          </span>
-          {reasonTip.text}
-        </div>
-      )}
+      {reasonTip &&
+        createPortal(
+          <div
+            role="tooltip"
+            className="pointer-events-none fixed z-[200] w-max max-w-[320px] -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs leading-snug break-words text-white shadow-xl"
+            style={{ left: reasonTip.x, top: reasonTip.y }}
+          >
+            <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+              Reason
+            </span>
+            {reasonTip.text}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }
