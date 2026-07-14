@@ -519,10 +519,13 @@ export function CalibrationTracker() {
                 const label = n > 0 ? stepTitles[safeStep] : "—";
                 const stepLinks = v.step_links ?? {};
                 const sortedLinks = [...linkOptions].sort((a, b) => a.sort_order - b.sort_order);
+                const jiraTicketText = v.jira_ticket?.trim() ?? "";
+                const hasLinksPanel = sortedLinks.length > 0 || jiraTicketText.length > 0;
                 const linksOpen = expandedLinkRows.has(v.id);
                 const savedLinkCount = sortedLinks.filter(
                   (lo) => (stepLinks[String(lo.sort_order)] ?? "").length > 0,
                 ).length;
+                const linksBadgeCount = savedLinkCount + (jiraTicketText ? 1 : 0);
                 const reasonText = v.reason?.trim() ?? "";
                 return (
                   <Fragment key={v.id}>
@@ -616,7 +619,7 @@ export function CalibrationTracker() {
                             <span className="hidden font-normal sm:inline"> ({nextLabel})</span>
                           )}
                         </button>
-                        {sortedLinks.length > 0 && (
+                        {hasLinksPanel && (
                           <button
                             type="button"
                             onClick={() => toggleLinkPanel(v.id)}
@@ -628,16 +631,33 @@ export function CalibrationTracker() {
                             }`}
                           >
                             Links
-                            {savedLinkCount > 0 ? ` (${savedLinkCount})` : ""}
+                            {linksBadgeCount > 0 ? ` (${linksBadgeCount})` : ""}
                           </button>
                         )}
                       </div>
                     </td>
                   </tr>
-                  {linksOpen && sortedLinks.length > 0 && (
+                  {linksOpen && hasLinksPanel && (
                     <tr className="border-b border-slate-100 bg-white">
                       <td colSpan={5} className="px-4 py-3">
                         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          {jiraTicketText && (
+                            <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 text-xs">
+                              <p className="mb-1.5 font-medium text-slate-800">Jira ticket</p>
+                              {savedLinkHref(jiraTicketText) ? (
+                                <a
+                                  href={savedLinkHref(jiraTicketText)!}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="block truncate text-sky-700 underline hover:text-sky-900"
+                                >
+                                  {jiraTicketText}
+                                </a>
+                              ) : (
+                                <span className="block truncate text-slate-700">{jiraTicketText}</span>
+                              )}
+                            </div>
+                          )}
                           {sortedLinks.map((lo) => {
                             const idx = lo.sort_order;
                             const saved = stepLinks[String(idx)] ?? "";
