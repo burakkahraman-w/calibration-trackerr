@@ -73,6 +73,11 @@ export function CalibrationTracker() {
   const [linkDrafts, setLinkDrafts] = useState<Record<string, Record<string, string>>>({});
   const [linkBusy, setLinkBusy] = useState<string | null>(null);
   const [expandedLinkRows, setExpandedLinkRows] = useState<Set<string>>(() => new Set());
+  const [reasonTip, setReasonTip] = useState<{
+    text: string;
+    x: number;
+    y: number;
+  } | null>(null);
   /** Admin-configured default owner; reapplied after starting a calibration when set. */
   const activeDefaultOwnerRef = useRef<string>("");
 
@@ -504,13 +509,34 @@ export function CalibrationTracker() {
                 const savedLinkCount = sortedLinks.filter(
                   (lo) => (stepLinks[String(lo.sort_order)] ?? "").length > 0,
                 ).length;
+                const reasonText = v.reason?.trim() ?? "";
                 return (
                   <Fragment key={v.id}>
                   <tr className={`border-b border-slate-100 ${colors.row}`}>
                     <td className="whitespace-nowrap px-4 py-3 text-slate-700">
                       {formatPerformed(v.performed_at)}
                     </td>
-                    <td className="px-4 py-3 font-medium text-slate-900">{v.vehicle_name}</td>
+                    <td className="px-4 py-3 font-medium text-slate-900">
+                      <span
+                        className={
+                          reasonText
+                            ? "cursor-help border-b border-dotted border-slate-400"
+                            : undefined
+                        }
+                        onMouseEnter={(e) => {
+                          if (!reasonText) return;
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setReasonTip({
+                            text: reasonText,
+                            x: rect.left + rect.width / 2,
+                            y: rect.top,
+                          });
+                        }}
+                        onMouseLeave={() => setReasonTip(null)}
+                      >
+                        {v.vehicle_name}
+                      </span>
+                    </td>
                     <td className="px-4 py-3">
                       <select
                         value={v.owner}
@@ -710,6 +736,19 @@ export function CalibrationTracker() {
           </table>
         </div>
       </section>
+
+      {reasonTip && (
+        <div
+          role="tooltip"
+          className="pointer-events-none fixed z-[200] max-w-sm -translate-x-1/2 -translate-y-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-xs leading-snug text-white shadow-xl"
+          style={{ left: reasonTip.x, top: reasonTip.y - 6 }}
+        >
+          <span className="mb-0.5 block text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            Reason
+          </span>
+          {reasonTip.text}
+        </div>
+      )}
     </div>
   );
 }
